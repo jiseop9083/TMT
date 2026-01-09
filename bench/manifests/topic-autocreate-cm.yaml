@@ -1,0 +1,98 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: topic-autocreate-scripts
+  namespace: kafka
+data:
+  run-autocreate.sh: |
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    BOOTSTRAP="${BOOTSTRAP:-my-cluster-kafka-bootstrap.kafka.svc:9092}"
+    TOPIC_PREFIX="${TOPIC_PREFIX:-autocreate-test}"
+    REPEATS_PER_POD="${REPEATS_PER_POD:-1}"
+    MESSAGE_COUNT="${MESSAGE_COUNT:-1}"
+    SLEEP_BETWEEN="${SLEEP_BETWEEN:-1}"
+    WAIT_FOR_RELEASE="${WAIT_FOR_RELEASE:-1}"
+
+    RECORD_SIZE="${RECORD_SIZE:-128}"
+    ACKS="${ACKS:-all}"
+    LINGER_MS="${LINGER_MS:-0}"
+    COMPRESSION="${COMPRESSION:-none}"
+
+    JFR_SETTINGS="${JFR_SETTINGS:-profile}"
+    ASYNC_EVENT="${ASYNC_EVENT:-cpu}"
+    ASYNC_DURATION="${ASYNC_DURATION:-10}"
+    SLEEP_AFTER_SEND="${SLEEP_AFTER_SEND:-${ASYNC_DURATION}}"
+    ASYNC_PROFILER_DIR="${ASYNC_PROFILER_DIR:-/opt/async-profiler}"
+
+    JOB_COMPLETION_INDEX="${JOB_COMPLETION_INDEX:-0}"
+    TOPIC="${TOPIC_PREFIX}-${JOB_COMPLETION_INDEX}"
+    POD_NAME="${POD_NAME:-unknown-pod}"
+    OUTDIR="/output/${POD_NAME}"
+    mkdir -p "${OUTDIR}"
+
+    if [[ -n "${KAFKA_BIN:-}" ]]; then
+      KAFKA_BIN="${KAFKA_BIN}"
+    elif [[ -x /opt/kafka/bin/kafka-console-producer.sh ]]; then
+      KAFKA_BIN="/opt/kafka/bin"
+    else
+      KAFKA_BIN="/opt/bitnami/kafka/bin"
+    fi
+
+    if [[ ! -x "${ASYNC_PROFILER_DIR}/asprof" ]]; then
+      echo "[error] async-profiler not found at ${ASYNC_PROFILER_DIR}/asprof" >&2
+      exit 1
+    fi
+    if [[ ! -f "${ASYNC_PROFILER_DIR}/libasyncProfiler.so" ]]; then
+      echo "[error] libasyncProfiler.so not found at ${ASYNC_PROFILER_DIR}/libasyncProfiler.so" >&2
+      ls -la "${ASYNC_PROFILER_DIR}" >&2 || true
+      exit 1
+    fi
+
+    echo "[info] bootstrap=${BOOTSTRAP}"
+    echo "[info] topic=${TOPIC}"
+    echo "[info] repeats_per_pod=${REPEATS_PER_POD} message_count=${MESSAGE_COUNT} sleep_between=${SLEEP_BETWEEN}s"
+
+    FIFO="/tmp/producer.fifo"
+    rm -f "${FIFO}"
+    mkfifo "${FIFO}"
+
+    KAFKA_OPTS="-XX:StartFlightRecording=name=autocreate,settings=${JFR_SETTINGS},filename=${OUTDIR}/producer.jfr,dumponexit=true"
+    KAFKA_OPTS="${KAFKA_OPTS} -agentpath:${ASYNC_PROFILER_DIR}/libasyncProfiler.so=start,event=${ASYNC_EVENT},duration=${ASYNC_DURATION},file=${OUTDIR}/async-profiler.html,format=html"
+    export KAFKA_OPTS
+    "${KAFKA_BIN}/kafka-console-producer.sh" \
+      --bootstrap-server "${BOOTSTRAP}" \
+      --topic "${TOPIC}" \
+      --producer-property "acks=${ACKS}" \
+      --producer-property "linger.ms=${LINGER_MS}" \
+      --producer-property "compression.type=${COMPRESSION}" \
+      < "${FIFO}" \
+      > "${OUTDIR}/producer.out" 2>&1 &
+    PRODUCER_PID=$!
+
+    exec 3>"${FIFO}"
+    for i in $(seq 1 "${REPEATS_PER_POD}"); do
+      for j in $(seq 1 "${MESSAGE_COUNT}"); do
+        TS="$(date +%s%3N)"
+        echo "${TS} message-${i}-${j}" >> "${OUTDIR}/send_times.log"
+        printf 'msg-%s-%s-%s\n' "${JOB_COMPLETION_INDEX}" "${i}" "${j}" >&3
+        sleep "${SLEEP_BETWEEN}"
+      done
+    done
+    if [[ "${SLEEP_AFTER_SEND}" -gt 0 ]]; then
+      sleep "${SLEEP_AFTER_SEND}"
+    fi
+
+    exec 3>&-
+    wait "${PRODUCER_PID}" || true
+
+    touch "/output/.done"
+    if [[ "${WAIT_FOR_RELEASE}" == "1" ]]; then
+      echo "[info] waiting for /output/.release"
+      while [[ ! -f "/output/.release" ]]; do
+        sleep 1
+      done
+    fi
+
+    echo "[done] output=${OUTDIR}"
