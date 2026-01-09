@@ -1,0 +1,29 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kafka-producer-experiment
+spec:
+  completions: 10            # 실험 횟수
+  parallelism: 1             # 직렬 실행
+  backoffLimit: 3            # transient failure 1회 재시도
+  ttlSecondsAfterFinished: 300
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: producer
+        image: my-kafka-producer:latest
+        imagePullPolicy: IfNotPresent
+        env:
+        env:
+        - name: JAVA_TOOL_OPTIONS
+          value: >
+            -XX:StartFlightRecording=settings=profile,filename=/profiles/producer-${HOSTNAME}.jfr,dumponexit=true
+        volumeMounts:
+        - name: profiles
+          mountPath: /profiles
+      volumes:
+      - name: profiles
+        hostPath:
+          path: /tmp/kafka-profiles    # <-- 노드 로컬 경로
+          type: DirectoryOrCreate
