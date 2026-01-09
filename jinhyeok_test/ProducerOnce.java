@@ -12,6 +12,7 @@ public class ProducerOnce {
         props.put("key.serializer", "org.apache.kafka.common.serialization.StringSerializer");
         props.put("value.serializer", "org.apache.kafka.common.serialization.StringSerializer");
         props.put("acks", "all");
+        props.put("max.request.size", 15_000_000);   
 
         int idx = Integer.parseInt(
             System.getenv().getOrDefault("JOB_COMPLETION_INDEX", "0")
@@ -19,11 +20,13 @@ public class ProducerOnce {
 
         String topic = "test_topic_" + (idx + 1);
 
+        String largeValue = "x".repeat(10_000_000); // 10MB 메시지
+
         // async-profiler attach 대기
         Thread.sleep(10000); // 10초
 
         KafkaProducer<String, String> producer = new KafkaProducer<>(props);
-        producer.send(new ProducerRecord<>(topic, "key", "value")).get();
+        producer.send(new ProducerRecord<>(topic, "key", largeValue)).get();
         producer.flush();
         producer.close();
 
