@@ -53,6 +53,8 @@ spec:
         type: internal
         tls: true
     config:
+      message.max.bytes: 15000000          # 브로커가 허용하는 최대 메시지 크기 (기본 1MB)
+      replica.fetch.max.bytes: 15000000
       offsets.topic.replication.factor: 3
       transaction.state.log.replication.factor: 3
       transaction.state.log.min.isr: 2
