@@ -43,7 +43,7 @@ make load-test
 - `NS` (default: `kafka`)
 - `CLUSTER` (default: `my-cluster`)
 - `TOPIC` (default: `test-topic`)
-- `NUM_RECORDS` (default: `10000000`)
+- `NUM_RECORDS` (default: `3000000`)
 - `RECORD_SIZE` (default: `10240`)
 - `THROUGHPUT` (default: `10000`)
 - `ACKS` (default: `all`)

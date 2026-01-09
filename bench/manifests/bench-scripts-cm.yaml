@@ -9,7 +9,7 @@ data:
     set -euo pipefail
 
     TOPIC="${TOPIC:-test-topic}"
-    NUM_RECORDS="${NUM_RECORDS:-10000000}"
+    NUM_RECORDS="${NUM_RECORDS:-3000000}"
     RECORD_SIZE="${RECORD_SIZE:-10240}"
     THROUGHPUT="${THROUGHPUT:-10000}"
 
