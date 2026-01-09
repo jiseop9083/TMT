@@ -13,25 +13,23 @@ public class ProducerOnce {
         props.put("value.serializer", "org.apache.kafka.common.serialization.StringSerializer");
         props.put("acks", "all");
 
-        long start = System.nanoTime();
+        int idx = Integer.parseInt(
+            System.getenv().getOrDefault("JOB_COMPLETION_INDEX", "0")
+        );
+
+        String topic = "test_topic_" + (idx + 1);
 
         // async-profiler attach 대기
         Thread.sleep(10000); // 10초
 
         KafkaProducer<String, String> producer = new KafkaProducer<>(props);
-        producer.send(new ProducerRecord<>("test-topic", "key", "value")).get();
+        producer.send(new ProducerRecord<>(topic, "key", "value")).get();
         producer.flush();
         producer.close();
 
         long end = System.nanoTime();
 
-        Files.writeString(
-            Path.of("/profiles/metrics.txt"),
-            "produce_latency_ns=" + (end - start)
-        );
-
         // profiler flush 여유
-        Thread.sleep(1000);
         Thread.sleep(60_000); // 60초
 
     }

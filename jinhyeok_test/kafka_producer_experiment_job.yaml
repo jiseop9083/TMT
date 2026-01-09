@@ -7,6 +7,7 @@ spec:
   parallelism: 1             # 직렬 실행
   backoffLimit: 3            # transient failure 1회 재시도
   ttlSecondsAfterFinished: 300
+  completionMode: Indexed
   template:
     spec:
       restartPolicy: Never
@@ -15,10 +16,10 @@ spec:
         image: my-kafka-producer:latest
         imagePullPolicy: IfNotPresent
         env:
-        env:
-        - name: JAVA_TOOL_OPTIONS
-          value: >
-            -XX:StartFlightRecording=settings=profile,filename=/profiles/producer-${HOSTNAME}.jfr,dumponexit=true
+        - name: JOB_COMPLETION_INDEX
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.annotations['batch.kubernetes.io/job-completion-index']
         volumeMounts:
         - name: profiles
           mountPath: /profiles
