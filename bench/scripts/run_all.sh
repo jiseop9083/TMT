@@ -11,7 +11,7 @@ LOADER_POD="kafka-loader"
 
 # Bench params (override by env if desired)
 TOPIC="${TOPIC:-test-topic}"
-NUM_RECORDS="${NUM_RECORDS:-10000000}"
+NUM_RECORDS="${NUM_RECORDS:-3000000}"
 RECORD_SIZE="${RECORD_SIZE:-10240}"
 THROUGHPUT="${THROUGHPUT:-10000}"
 ACKS="${ACKS:-all}"
@@ -28,7 +28,16 @@ ASYNC_OUT="${ASYNC_OUT:-/tmp/async-profiler.html}"
 JFR_OUT="${JFR_OUT:-/tmp/bench.jfr}"
 
 # Local async-profiler path (you must have it locally; no internet assumed)
-ASYNC_LOCAL_DIR="${ASYNC_LOCAL_DIR:-$(cd "$(dirname "$0")" && pwd)/async-profiler}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEFAULT_ASYNC_LOCAL_DIR="${SCRIPT_DIR}/async-profiler"
+ASYNC_LOCAL_DIR="${ASYNC_LOCAL_DIR:-${DEFAULT_ASYNC_LOCAL_DIR}}"
+if [[ -z "${ASYNC_LOCAL_DIR}" || ! -d "${ASYNC_LOCAL_DIR}" ]]; then
+  ASYNC_LOCAL_DIR="${DEFAULT_ASYNC_LOCAL_DIR}"
+fi
+# Normalize Windows path for tar in Git Bash/MSYS if available
+if command -v cygpath >/dev/null 2>&1; then
+  ASYNC_LOCAL_DIR="$(cygpath -u "${ASYNC_LOCAL_DIR}")"
+fi
 ASYNC_REMOTE_DIR="/tmp/async-profiler"
 
 # Output dir
@@ -43,11 +52,30 @@ echo "[info] output dir=${OUTDIR}"
 # Helpers
 # ----------------------------
 need_cmd() { command -v "$1" >/dev/null 2>&1 || { echo "[error] missing command: $1" >&2; exit 1; }; }
+is_windows() {
+  case "$(uname -s 2>/dev/null || echo)" in
+    MINGW*|MSYS*|CYGWIN*) return 0 ;;
+  esac
+  return 1
+}
+if is_windows; then
+  # Prevent MSYS path mangling (e.g., /tmp -> C:\Users\...\Temp) for kubectl exec args
+  export MSYS2_ARG_CONV_EXCL="*"
+fi
 need_cmd kubectl
+TAR_BIN="tar"
+if [[ -x /usr/bin/tar ]]; then
+  TAR_BIN="/usr/bin/tar"
+fi
 
 apply_manifests() {
-  kubectl apply -f "$(cd "$(dirname "$0")/.." && pwd)/manifests/bench-scripts-cm.yaml"
-  kubectl apply -f "$(cd "$(dirname "$0")/.." && pwd)/manifests/kafka-loader.yaml"
+  local manifests_dir
+  manifests_dir="$(cd "$(dirname "$0")/.." && pwd)/manifests"
+  if is_windows && command -v cygpath >/dev/null 2>&1; then
+    manifests_dir="$(cygpath -w "${manifests_dir}")"
+  fi
+  kubectl apply -f "${manifests_dir}/bench-scripts-cm.yaml"
+  kubectl apply -f "${manifests_dir}/kafka-loader.yaml"
   kubectl wait -n "${NS}" --for=condition=Ready pod/"${LOADER_POD}" --timeout=180s
 }
 
@@ -77,7 +105,12 @@ get_kafka_pid() {
 ensure_async_profiler_on_pod() {
   local pod="$1"
 
-  if [[ ! -x "${ASYNC_LOCAL_DIR}/asprof" ]]; then
+  echo "[info] async-profiler dir=${ASYNC_LOCAL_DIR}"
+  if [[ ! -d "${ASYNC_LOCAL_DIR}" ]]; then
+    echo "[error] async-profiler dir not found: ${ASYNC_LOCAL_DIR}" >&2
+    exit 1
+  fi
+  if [[ ! -f "${ASYNC_LOCAL_DIR}/asprof" ]]; then
     echo "[error] async-profiler not found at: ${ASYNC_LOCAL_DIR}/asprof" >&2
     echo "[hint] download async-profiler release locally and extract into ${ASYNC_LOCAL_DIR}" >&2
     exit 1
@@ -86,8 +119,9 @@ ensure_async_profiler_on_pod() {
   # copy directory to pod
   echo "[info] copying async-profiler to broker pod..."
   kubectl exec -n "${NS}" "${pod}" -- bash -lc "rm -rf '${ASYNC_REMOTE_DIR}' && mkdir -p '${ASYNC_REMOTE_DIR}'"
-  # Copy directory contents to keep /tmp/async-profiler/asprof layout
-  kubectl cp "${ASYNC_LOCAL_DIR}/." -n "${NS}" "${pod}:${ASYNC_REMOTE_DIR}"
+  # Copy directory contents via tar to avoid kubectl cp path parsing on Windows
+  "${TAR_BIN}" -C "${ASYNC_LOCAL_DIR}" -cf - . | \
+    kubectl exec -i -n "${NS}" "${pod}" -- tar -C "${ASYNC_REMOTE_DIR}" -xf -
   # Fix execute permissions
   kubectl exec -n "${NS}" "${pod}" -- bash -lc "chmod +x '${ASYNC_REMOTE_DIR}/asprof' || true"
 }
