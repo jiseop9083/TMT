@@ -1,1 +1,6 @@
 /out
+
+**/out
+**/async-profiler-**
+
+.DS_Store

@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: producer-config
+data:
+  PROFILES_DIR: "/profiles"
+  ASYNC_EVENT: "wall"
+  ASYNC_DURATION: "30"
+  START_DELAY_MS: "3000"
+  POST_SEND_SLEEP_MS: "3000"
+  NUM_MESSAGES: "5"
