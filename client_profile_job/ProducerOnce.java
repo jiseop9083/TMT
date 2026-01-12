@@ -58,7 +58,7 @@ public class ProducerOnce {
 
         String runDir = System.getenv().getOrDefault("RUN_DIR", "/profiles/run-0");
         String runTs = System.getenv().getOrDefault("RUN_TS", "unknown");
-        Path metricsPath = Path.of(runDir, "metrics-" + runTs + ".txt");
+        Path metricsPath = Path.of(runDir, "metrics" + ".txt");
 
         // async-profiler attach 대기
         Thread.sleep(startDelayMs);

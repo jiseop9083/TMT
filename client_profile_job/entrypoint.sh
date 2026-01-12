@@ -26,7 +26,7 @@ exec > >(tee -a "${RUN_DIR}/app.log") 2>&1
 ASYNC_AGENT_ARGS=""
 PROF_START_MS=""
 if [[ "${ASYNC_PROFILER_ENABLE:-1}" == "1" ]]; then
-  ASYNC_AGENT_ARGS="-agentpath:/async-profiler/lib/libasyncProfiler.so=start,event=${ASYNC_EVENT:-wall},timeout=${ASYNC_DURATION:-30},file=${RUN_DIR}/async-${RUN_TS}.collapsed,format=collapsed"
+  ASYNC_AGENT_ARGS="-agentpath:/async-profiler/lib/libasyncProfiler.so=start,event=${ASYNC_EVENT:-wall},timeout=${ASYNC_DURATION:-30},file=${RUN_DIR}/async.collapsed,format=collapsed"
   if [[ -n "${ASYNC_INTERVAL:-}" ]]; then
     ASYNC_AGENT_ARGS="${ASYNC_AGENT_ARGS},interval=${ASYNC_INTERVAL}"
   fi
@@ -36,7 +36,7 @@ fi
 
 java \
   ${ASYNC_AGENT_ARGS} \
-  -XX:StartFlightRecording=settings=profile,filename=${RUN_DIR}/producer-${RUN_TS}.jfr,dumponexit=true \
+  -XX:StartFlightRecording=settings=profile,filename=${RUN_DIR}/jfr.jfr,dumponexit=true \
   -cp "/app/*:/app/lib/*" \
   ProducerOnce
 exit_code=$?
