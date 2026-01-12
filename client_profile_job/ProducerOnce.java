@@ -50,7 +50,7 @@ public class ProducerOnce {
             System.getenv().getOrDefault("START_DELAY_MS", "3000")
         );
         long postSendSleepMs = Long.parseLong(
-            System.getenv().getOrDefault("POST_SEND_SLEEP_MS", "3000")
+            System.getenv().getOrDefault("POST_SEND_SLEEP_MS", "1000")
         );
         int numMessages = Integer.parseInt(
             System.getenv().getOrDefault("NUM_MESSAGES", "5")
@@ -61,7 +61,7 @@ public class ProducerOnce {
         Path metricsPath = Path.of(runDir, "metrics" + ".txt");
 
         // async-profiler attach 대기
-        Thread.sleep(startDelayMs);
+        // Thread.sleep(startDelayMs);
 
         System.out.println("producer_start topic=" + topic
             + " payload_bytes=" + largeValue.length()
@@ -108,6 +108,5 @@ public class ProducerOnce {
 
         // profiler flush 여유
         Thread.sleep(postSendSleepMs);
-
     }
 }

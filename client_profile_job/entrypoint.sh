@@ -30,12 +30,12 @@ exec > >(tee -a "${RUN_DIR}/app.log") 2>&1
 ASYNC_AGENT_ARGS=""
 PROF_START_MS=""
 if [[ "${ASYNC_PROFILER_ENABLE:-1}" == "1" ]]; then
-  ASYNC_AGENT_ARGS="-agentpath:/async-profiler/lib/libasyncProfiler.so=start,event=${ASYNC_EVENT:-wall},timeout=${ASYNC_DURATION:-30},file=${RUN_DIR}/async.collapsed,format=collapsed"
+  ASYNC_AGENT_ARGS="-agentpath:/async-profiler/lib/libasyncProfiler.so=start,event=${ASYNC_EVENT:-wall},timeout=${ASYNC_DURATION:-0},file=${RUN_DIR}/async.collapsed,format=collapsed"
   if [[ -n "${ASYNC_INTERVAL:-}" ]]; then
     ASYNC_AGENT_ARGS="${ASYNC_AGENT_ARGS},interval=${ASYNC_INTERVAL}"
   fi
   PROF_START_MS="$(date +%s%3N)"
-  echo "async-profiler start_ms=${PROF_START_MS}, timeout_s=${ASYNC_DURATION:-30}"
+  echo "async-profiler start_ms=${PROF_START_MS}, timeout_s=${ASYNC_DURATION:-0}"
 fi
 
 java \
@@ -51,7 +51,7 @@ if [[ -n "${PROF_START_MS}" ]]; then
 fi
 
 # kubectl cp를 위한 여유 시간
-POST_EXIT_SLEEP_MS="${POST_EXIT_SLEEP_MS:-15000}"
+POST_EXIT_SLEEP_MS="${POST_EXIT_SLEEP_MS:-1000}"
 sleep "$(awk "BEGIN {printf \"%.3f\", ${POST_EXIT_SLEEP_MS}/1000}")"
 
 exit "${exit_code}"
