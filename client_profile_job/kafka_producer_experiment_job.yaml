@@ -3,30 +3,31 @@ kind: Job
 metadata:
   name: kafka-producer-experiment
 spec:
-  completions: 1             # 실험 1회 (스크립트에서 반복)
-  parallelism: 1             # 직렬 실행
-  backoffLimit: 3            # transient failure 1회 재시도
+  completions: 1000
+  completionMode: Indexed
+  parallelism: 1
+  backoffLimit: 3
   ttlSecondsAfterFinished: 300
   template:
     spec:
       restartPolicy: Never
       containers:
-      - name: producer
-        image: my-kafka-producer:latest
-        imagePullPolicy: IfNotPresent
-        env:
-        - name: RUN_INDEX
-          value: "RUN_INDEX_VALUE"
-        - name: RUN_TS
-          value: "RUN_TS_VALUE"
-        envFrom:
-        - configMapRef:
-            name: producer-config
-        volumeMounts:
-        - name: profiles
-          mountPath: /profiles
+        - name: producer
+          image: my-kafka-producer:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: JOB_COMPLETION_INDEX
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.annotations['batch.kubernetes.io/job-completion-index']
+          envFrom:
+            - configMapRef:
+                name: producer-config
+          volumeMounts:
+            - name: profiles
+              mountPath: /profiles
       volumes:
-      - name: profiles
-        hostPath:
-          path: /tmp/kafka-profiles    # <-- 노드 로컬 경로
-          type: DirectoryOrCreate
+        - name: profiles
+          hostPath:
+            path: /tmp/kafka-profiles
+            type: DirectoryOrCreate

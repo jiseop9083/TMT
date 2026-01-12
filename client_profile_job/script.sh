@@ -11,6 +11,7 @@ JOB_TEMPLATE="${JOB_TEMPLATE:-${SCRIPT_DIR}/kafka_producer_experiment_job.yaml}"
 CONFIG_MANIFEST="${CONFIG_MANIFEST:-${SCRIPT_DIR}/producer_config.yaml}"
 
 REPEAT="${REPEAT:-1000}"
+PARALLELISM="${PARALLELISM:-1}"
 
 KAFKA_CLIENTS_VERSION="${KAFKA_CLIENTS_VERSION:-4.1.1}"
 SLF4J_VERSION="${SLF4J_VERSION:-2.0.16}"
@@ -47,48 +48,41 @@ docker build \
 echo "[info] applying producer config..."
 kubectl apply -n "${NS}" -f "${CONFIG_MANIFEST}"
 
-for i in $(seq 1 "${REPEAT}"); do
-  # 1회 실행 = Job 1개
-  JOB_NAME="kafka-producer-experiment-${i}"
-  echo "[info] run ${i}/${REPEAT} job=${JOB_NAME}"
+JOB_NAME="kafka-producer-experiment"
+echo "[info] run job=${JOB_NAME} completions=${REPEAT} parallelism=${PARALLELISM}"
 
-  kubectl delete -n "${NS}" "job/${JOB_NAME}" --ignore-not-found
+kubectl delete -n "${NS}" "job/${JOB_NAME}" --ignore-not-found
 
-  RUN_TS="$(date +%Y%m%d-%H%M%S-%N)"
+sed -e "s/^  name: kafka-producer-experiment/  name: ${JOB_NAME}/" \
+    -e "s/^  completions: .*/  completions: ${REPEAT}/" \
+    -e "s/^  parallelism: .*/  parallelism: ${PARALLELISM}/" \
+    "${JOB_TEMPLATE}" | kubectl apply -n "${NS}" -f -
 
-  sed -e "s/name: kafka-producer-experiment/name: ${JOB_NAME}/" \
-      -e "s/RUN_INDEX_VALUE/${i}/" \
-      -e "s/RUN_TS_VALUE/${RUN_TS}/" \
-      "${JOB_TEMPLATE}" | kubectl apply -n "${NS}" -f -
+# Job ?? ??
+kubectl wait -n "${NS}" --for=condition=Complete "job/${JOB_NAME}" --timeout=300s
 
-  POD_NAME=""
-  for _ in $(seq 1 30); do
-    POD_NAME="$(kubectl get pods -n "${NS}" -l job-name="${JOB_NAME}" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
-    if [[ -n "${POD_NAME}" ]]; then
-      break
-    fi
-    sleep 1
-  done
-  if [[ -z "${POD_NAME}" ]]; then
-    echo "[error] pod not found for job ${JOB_NAME}"
-    exit 1
+PODS="$(kubectl get pods -n "${NS}" -l job-name="${JOB_NAME}" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')"
+if [[ -z "${PODS}" ]]; then
+  echo "[error] pods not found for job ${JOB_NAME}"
+  exit 1
+fi
+
+MAX_WAIT_SECS="${MAX_WAIT_SECS:-120}"
+for POD_NAME in ${PODS}; do
+  idx="$(kubectl get pod -n "${NS}" "${POD_NAME}" -o jsonpath='{.metadata.annotations.batch\.kubernetes\.io/job-completion-index}' 2>/dev/null || true)"
+  if [[ -z "${idx}" ]]; then
+    echo "[warn] completion index not found for pod ${POD_NAME}"
+    continue
   fi
-  kubectl wait -n "${NS}" --for=condition=Ready "pod/${POD_NAME}" --timeout=180s
-  sleep 3
+  run_idx="$((idx + 1))"
+  job_dir="${OUTDIR}/kafka-producer-experiment-${run_idx}"
 
-  # 결과 파일 생성 확인 후, 완료 전에 결과 수집
-  MAX_WAIT_SECS="${MAX_WAIT_SECS:-120}"
-  echo "[info] waiting for profile files (max ${MAX_WAIT_SECS}s)..."
+  echo "[info] collecting artifacts from pod=${POD_NAME} index=${run_idx}"
   elapsed=0
   files_ready=0
   while (( elapsed < MAX_WAIT_SECS )); do
-    phase="$(kubectl get pod -n "${NS}" "${POD_NAME}" -o jsonpath='{.status.phase}' 2>/dev/null || true)"
-    if [[ "${phase}" == "Succeeded" || "${phase}" == "Failed" ]]; then
-      echo "[warn] pod completed before files were detected (phase=${phase})"
-      break
-    fi
     if kubectl exec -n "${NS}" -c producer "${POD_NAME}" -- bash -lc \
-      "ls -1 /profiles/run-${i}/async.collapsed /profiles/run-${i}/jfr.jfr >/dev/null 2>&1"; then
+      "ls -1 /profiles/run-${run_idx}/async.collapsed /profiles/run-${run_idx}/jfr.jfr >/dev/null 2>&1"; then
       files_ready=1
       break
     fi
@@ -97,13 +91,9 @@ for i in $(seq 1 "${REPEAT}"); do
   done
 
   if [[ "${files_ready}" == "1" ]]; then
-    echo "[info] collecting artifacts to ${OUTDIR}/${JOB_NAME}"
-    mkdir -p "${OUTDIR}/${JOB_NAME}"
-    kubectl cp -n "${NS}" "${POD_NAME}:/profiles/run-${i}" "${OUTDIR}/${JOB_NAME}" -c producer || true
+    mkdir -p "${job_dir}"
+    kubectl cp -n "${NS}" "${POD_NAME}:/profiles/run-${run_idx}" "${job_dir}" -c producer || true
   else
-    echo "[warn] skipping kubectl cp; files not detected before pod completion"
+    echo "[warn] skipping kubectl cp for ${POD_NAME}; files not detected"
   fi
-
-  # Job 완료 대기
-  kubectl wait -n "${NS}" --for=condition=Complete "job/${JOB_NAME}" --timeout=300s
 done

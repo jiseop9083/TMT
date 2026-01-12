@@ -1,8 +1,12 @@
 #!/bin/bash
 set -euo pipefail
 
-# Job completion index
-IDX="${RUN_INDEX:-${JOB_COMPLETION_INDEX:-unknown}}"
+# Job completion index (Indexed Job is 0-based; map to 1-based)
+IDX="${RUN_INDEX:-}"
+if [[ -z "${IDX}" && -n "${JOB_COMPLETION_INDEX:-}" ]]; then
+  IDX="$((JOB_COMPLETION_INDEX + 1))"
+fi
+IDX="${IDX:-unknown}"
 
 # timestamp 생성 (한 번만)
 RUN_TS="${RUN_TS:-$(date +%Y%m%d-%H%M%S-%N)}"
