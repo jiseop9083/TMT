@@ -26,6 +26,9 @@ exec > >(tee -a "${RUN_DIR}/app.log") 2>&1
 ASYNC_AGENT_ARGS=""
 if [[ "${ASYNC_PROFILER_ENABLE:-1}" == "1" ]]; then
   ASYNC_AGENT_ARGS="-agentpath:/async-profiler/lib/libasyncProfiler.so=start,event=${ASYNC_EVENT:-wall},timeout=${ASYNC_DURATION:-30},file=${RUN_DIR}/async-${RUN_TS}.html"
+  if [[ -n "${ASYNC_INTERVAL:-}" ]]; then
+    ASYNC_AGENT_ARGS="${ASYNC_AGENT_ARGS},interval=${ASYNC_INTERVAL}"
+  fi
 fi
 
 java \
