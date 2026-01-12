@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import re
+import shutil
+import subprocess
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
-
-import matplotlib.pyplot as plt
 
 APP_LOG_ELAPSED_RE = re.compile(r"elapsed_ms=(\d+)")
 DO_SEND_FRAME = "org/apache/kafka/clients/producer/KafkaProducer.doSend"
@@ -55,6 +56,31 @@ class ParsedRun:
     metadata_by_frame: Dict[str, int]
     do_send_children: Dict[str, int]
     do_send_full_paths: Dict[str, int]
+    resource_stats: "ResourceStats | None"
+
+
+@dataclass
+class ResourceStats:
+    cpu_samples: int
+    cpu_jvm_user_avg: float
+    cpu_jvm_user_max: float
+    cpu_jvm_system_avg: float
+    cpu_jvm_system_max: float
+    cpu_machine_total_avg: float
+    cpu_machine_total_max: float
+    cpu_jvm_total_avg: float
+    cpu_jvm_total_max: float
+    phys_mem_samples: int
+    phys_mem_total_bytes: int
+    phys_mem_used_avg: float
+    phys_mem_used_max: float
+    heap_before_gc_samples: int
+    heap_before_gc_used_avg: float
+    heap_before_gc_used_max: float
+    heap_after_gc_samples: int
+    heap_after_gc_used_avg: float
+    heap_after_gc_used_max: float
+    heap_committed_avg: float
 
 
 def parse_metrics(path: Path) -> Dict[str, str]:
@@ -182,10 +208,116 @@ def samples_to_ms(samples: int, total_samples: int, elapsed_ms: int) -> float:
     return (samples / total_samples) * elapsed_ms
 
 
-def parse_run(exp_dir: Path) -> ParsedRun | None:
+def safe_mean(values: List[float]) -> float:
+    if not values:
+        return 0.0
+    return sum(values) / len(values)
+
+
+def safe_max(values: List[float]) -> float:
+    if not values:
+        return 0.0
+    return max(values)
+
+
+def read_jfr_events(path: Path, event_names: Iterable[str]) -> List[Dict[str, object]]:
+    if not path.exists():
+        return []
+    if shutil.which("jfr") is None:
+        return []
+    cmd = [
+        "jfr",
+        "print",
+        "--json",
+        "--events",
+        ",".join(event_names),
+        str(path),
+    ]
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        return []
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return []
+    return list(data.get("recording", {}).get("events", []))
+
+
+def parse_resource_stats(jfr_path: Path) -> ResourceStats | None:
+    events = read_jfr_events(jfr_path, ["CPULoad", "PhysicalMemory", "GCHeapSummary"])
+    if not events:
+        return None
+
+    cpu_user: List[float] = []
+    cpu_system: List[float] = []
+    cpu_machine: List[float] = []
+    phys_total: List[int] = []
+    phys_used: List[int] = []
+    heap_before: List[int] = []
+    heap_after: List[int] = []
+    heap_committed: List[int] = []
+
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        event_type = event.get("type")
+        values = event.get("values", {})
+        if not isinstance(values, dict):
+            continue
+        if event_type == "jdk.CPULoad":
+            cpu_user.append(float(values.get("jvmUser", 0.0)))
+            cpu_system.append(float(values.get("jvmSystem", 0.0)))
+            cpu_machine.append(float(values.get("machineTotal", 0.0)))
+        elif event_type == "jdk.PhysicalMemory":
+            phys_total.append(int(values.get("totalSize", 0)))
+            phys_used.append(int(values.get("usedSize", 0)))
+        elif event_type == "jdk.GCHeapSummary":
+            when = values.get("when")
+            heap_used = int(values.get("heapUsed", 0))
+            heap_space = values.get("heapSpace", {})
+            if isinstance(heap_space, dict):
+                heap_committed.append(int(heap_space.get("committedSize", 0)))
+            if when == "Before GC":
+                heap_before.append(heap_used)
+            elif when == "After GC":
+                heap_after.append(heap_used)
+
+    cpu_jvm_total = [u + s for u, s in zip(cpu_user, cpu_system)]
+
+    return ResourceStats(
+        cpu_samples=len(cpu_user),
+        cpu_jvm_user_avg=safe_mean(cpu_user),
+        cpu_jvm_user_max=safe_max(cpu_user),
+        cpu_jvm_system_avg=safe_mean(cpu_system),
+        cpu_jvm_system_max=safe_max(cpu_system),
+        cpu_machine_total_avg=safe_mean(cpu_machine),
+        cpu_machine_total_max=safe_max(cpu_machine),
+        cpu_jvm_total_avg=safe_mean(cpu_jvm_total),
+        cpu_jvm_total_max=safe_max(cpu_jvm_total),
+        phys_mem_samples=len(phys_used),
+        phys_mem_total_bytes=int(safe_mean([float(v) for v in phys_total])),
+        phys_mem_used_avg=safe_mean([float(v) for v in phys_used]),
+        phys_mem_used_max=float(safe_max([float(v) for v in phys_used])),
+        heap_before_gc_samples=len(heap_before),
+        heap_before_gc_used_avg=safe_mean([float(v) for v in heap_before]),
+        heap_before_gc_used_max=float(safe_max([float(v) for v in heap_before])),
+        heap_after_gc_samples=len(heap_after),
+        heap_after_gc_used_avg=safe_mean([float(v) for v in heap_after]),
+        heap_after_gc_used_max=float(safe_max([float(v) for v in heap_after])),
+        heap_committed_avg=safe_mean([float(v) for v in heap_committed]),
+    )
+
+
+def parse_run(exp_dir: Path, jfr_progress: bool = False) -> ParsedRun | None:
     metrics_path = exp_dir / "metrics.txt"
     collapsed_path = exp_dir / "async.collapsed"
     app_log_path = exp_dir / "app.log"
+    jfr_path = exp_dir / "jfr.jfr"
 
     if not metrics_path.exists() or not collapsed_path.exists():
         return None
@@ -232,6 +364,14 @@ def parse_run(exp_dir: Path) -> ParsedRun | None:
     serializer_serialize_ms = samples_to_ms(
         serializer_serialize_samples, total_samples, time_base_ms
     )
+    if jfr_progress:
+        if jfr_path.exists():
+            print(f"[jfr] {exp_dir.name} start")
+        else:
+            print(f"[jfr] {exp_dir.name} missing")
+    resource_stats = parse_resource_stats(jfr_path)
+    if jfr_progress and jfr_path.exists():
+        print(f"[jfr] {exp_dir.name} done")
 
     return ParsedRun(
         run_dir=exp_dir,
@@ -254,6 +394,7 @@ def parse_run(exp_dir: Path) -> ParsedRun | None:
         metadata_by_frame=metadata_by_frame,
         do_send_children=do_send_children,
         do_send_full_paths=do_send_full_paths,
+        resource_stats=resource_stats,
     )
 
 
@@ -316,50 +457,89 @@ def write_kv_csv(out_path: Path, runs: List[ParsedRun], attr: str) -> None:
                 writer.writerow([run.topic_count, label, samples])
 
 
-def as_float(value: str) -> float:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return 0.0
-
-
-def plot_latency(rows: List[Dict[str, str]], out_dir: Path) -> None:
-    topic_counts = [as_float(row.get("topic_count", "0")) for row in rows]
-    send_ack_ms = [as_float(row.get("send_ack_total_ms", "0")) for row in rows]
-
-    plt.figure(figsize=(9, 5))
-    plt.scatter(topic_counts, send_ack_ms, label="E2E latency")
-    plt.xlabel("topic_count")
-    plt.ylabel("milliseconds")
-    plt.title("E2E latency")
-    plt.grid(True, alpha=0.3)
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(out_dir / "e2e_latency.png", dpi=200)
-    plt.close()
-
-
-def plot_method_times(rows: List[Dict[str, str]], out_dir: Path) -> None:
-    topic_counts = [as_float(row.get("topic_count", "0")) for row in rows]
-    series = [
-        ("doSend", "do_send_ms"),
-        ("waitOnMetadata", "wait_on_metadata_ms"),
-        ("RecordAccumulator.append", "record_accumulator_append_ms"),
-        ("Serializer.serialize", "serializer_serialize_ms"),
-    ]
-
-    plt.figure(figsize=(9, 6))
-    for label, key in series:
-        values = [as_float(row.get(key, "0")) for row in rows]
-        plt.scatter(topic_counts, values, label=label)
-    plt.xlabel("topic_count")
-    plt.ylabel("estimated ms")
-    plt.title("Per-Method Latency")
-    plt.grid(True, alpha=0.3)
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(out_dir / "per_method_latency.png", dpi=200)
-    plt.close()
+def write_resource_csv(out_dir: Path, runs: List[ParsedRun]) -> None:
+    path = out_dir / "resources.csv"
+    with path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(
+            [
+                "experiment_id",
+                "topic",
+                "topic_count",
+                "cpu_samples",
+                "cpu_jvm_user_avg",
+                "cpu_jvm_user_max",
+                "cpu_jvm_system_avg",
+                "cpu_jvm_system_max",
+                "cpu_machine_total_avg",
+                "cpu_machine_total_max",
+                "cpu_jvm_total_avg",
+                "cpu_jvm_total_max",
+                "phys_mem_samples",
+                "phys_mem_total_bytes",
+                "phys_mem_used_avg",
+                "phys_mem_used_max",
+                "heap_before_gc_samples",
+                "heap_before_gc_used_avg",
+                "heap_before_gc_used_max",
+                "heap_after_gc_samples",
+                "heap_after_gc_used_avg",
+                "heap_after_gc_used_max",
+                "heap_committed_avg",
+                "run_dir",
+            ]
+        )
+        for run in sorted(runs, key=lambda r: (r.topic_count, r.experiment_id)):
+            stats = run.resource_stats or ResourceStats(
+                cpu_samples=0,
+                cpu_jvm_user_avg=0.0,
+                cpu_jvm_user_max=0.0,
+                cpu_jvm_system_avg=0.0,
+                cpu_jvm_system_max=0.0,
+                cpu_machine_total_avg=0.0,
+                cpu_machine_total_max=0.0,
+                cpu_jvm_total_avg=0.0,
+                cpu_jvm_total_max=0.0,
+                phys_mem_samples=0,
+                phys_mem_total_bytes=0,
+                phys_mem_used_avg=0.0,
+                phys_mem_used_max=0.0,
+                heap_before_gc_samples=0,
+                heap_before_gc_used_avg=0.0,
+                heap_before_gc_used_max=0.0,
+                heap_after_gc_samples=0,
+                heap_after_gc_used_avg=0.0,
+                heap_after_gc_used_max=0.0,
+                heap_committed_avg=0.0,
+            )
+            writer.writerow(
+                [
+                    run.experiment_id,
+                    run.topic,
+                    run.topic_count,
+                    stats.cpu_samples,
+                    f"{stats.cpu_jvm_user_avg:.6f}",
+                    f"{stats.cpu_jvm_user_max:.6f}",
+                    f"{stats.cpu_jvm_system_avg:.6f}",
+                    f"{stats.cpu_jvm_system_max:.6f}",
+                    f"{stats.cpu_machine_total_avg:.6f}",
+                    f"{stats.cpu_machine_total_max:.6f}",
+                    f"{stats.cpu_jvm_total_avg:.6f}",
+                    f"{stats.cpu_jvm_total_max:.6f}",
+                    stats.phys_mem_samples,
+                    stats.phys_mem_total_bytes,
+                    f"{stats.phys_mem_used_avg:.2f}",
+                    f"{stats.phys_mem_used_max:.2f}",
+                    stats.heap_before_gc_samples,
+                    f"{stats.heap_before_gc_used_avg:.2f}",
+                    f"{stats.heap_before_gc_used_max:.2f}",
+                    stats.heap_after_gc_samples,
+                    f"{stats.heap_after_gc_used_avg:.2f}",
+                    f"{stats.heap_after_gc_used_max:.2f}",
+                    f"{stats.heap_committed_avg:.2f}",
+                    run.run_dir,
+                ]
+            )
 
 
 def main() -> None:
@@ -377,9 +557,9 @@ def main() -> None:
         help="Write doSend full subpaths CSV (can be large).",
     )
     parser.add_argument(
-        "--plot",
+        "--jfr-progress",
         action="store_true",
-        help="Write plots to analysis/plots.",
+        help="Print progress while parsing jfr.jfr files.",
     )
     args = parser.parse_args()
 
@@ -388,7 +568,7 @@ def main() -> None:
 
     runs: List[ParsedRun] = []
     for exp_dir in exp_dirs:
-        parsed = parse_run(exp_dir)
+        parsed = parse_run(exp_dir, jfr_progress=args.jfr_progress)
         if parsed:
             runs.append(parsed)
 
@@ -401,26 +581,12 @@ def main() -> None:
     write_summary_csv(analysis_dir, runs)
     write_kv_csv(analysis_dir / "metadata_by_frame.csv", runs, "metadata_by_frame")
     write_kv_csv(analysis_dir / "do_send_children.csv", runs, "do_send_children")
+    write_resource_csv(analysis_dir, runs)
 
     if args.full_paths:
         write_kv_csv(
             analysis_dir / "do_send_full_paths.csv", runs, "do_send_full_paths"
         )
-
-    if args.plot:
-        summary_path = analysis_dir / "summary.csv"
-        with summary_path.open("r", encoding="utf-8") as f:
-            rows = list(csv.DictReader(f))
-        rows.sort(
-            key=lambda r: (
-                as_float(r.get("topic_count", "0")),
-                as_float(r.get("experiment_id", "0")),
-            )
-        )
-        plot_dir = analysis_dir / "plots"
-        plot_dir.mkdir(exist_ok=True)
-        plot_latency(rows, plot_dir)
-        plot_method_times(rows, plot_dir)
 
     print(f"Wrote analysis CSVs to {analysis_dir}")
 
