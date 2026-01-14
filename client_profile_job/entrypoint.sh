@@ -27,11 +27,13 @@ export RUN_TS
 exec > >(tee -a "${RUN_DIR}/app.log") 2>&1
 
 # JVM 실행 (JFR은 시작 시점에 활성화)
+# 절대 경로로 실행
+PROFILE_PATH=/custom_profile.jfc
 java \
   -XX:+UnlockDiagnosticVMOptions \
   -XX:+DebugNonSafepoints \
   -XX:FlightRecorderOptions=stackdepth=256 \
-  -XX:StartFlightRecording=settings=profile,filename=${RUN_DIR}/jfr.jfr,dumponexit=true\
+  -XX:StartFlightRecording=settings=${PROFILE_PATH},filename=${RUN_DIR}/jfr.jfr,dumponexit=true \
   -cp "/app/*:/app/lib/*" \
   ProducerOnce
 
