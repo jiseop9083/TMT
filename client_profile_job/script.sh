@@ -74,14 +74,27 @@ while true; do
 
   # 파일 준비 대기
   ready=0
-  for _ in {1..150}; do
-    if kubectl exec -n "${NS}" -c producer "${POD_NAME}" -- \
-      test -f "/profiles/run-${run_idx}/async.collapsed" 2>/dev/null; then
-      ready=1
-      break
+  last_size=0
+  stable_cnt=0
+
+  for _ in {1..300}; do
+    size=$(kubectl exec -n "${NS}" -c producer "${POD_NAME}" -- \
+      stat -c %s "/profiles/run-${run_idx}/jfr.jfr" 2>/dev/null || echo 0)
+
+    if [[ "$size" -gt 0 && "$size" -eq "$last_size" ]]; then
+      stable_cnt=$((stable_cnt + 1))
+      if [[ "$stable_cnt" -ge 5 ]]; then
+        ready=1
+        break
+      fi
+    else
+      stable_cnt=0
     fi
+
+    last_size="$size"
     sleep 0.1
   done
+
 
   if [[ "${ready}" != "1" ]]; then
     echo "✗ Run-${run_idx}: files not ready"
