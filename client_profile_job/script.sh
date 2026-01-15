@@ -76,7 +76,7 @@ while true; do
   ready=0
   for _ in {1..150}; do
     if kubectl exec -n "${NS}" -c producer "${POD_NAME}" -- \
-      test -f "/profiles/run-${run_idx}/async.collapsed" 2>/dev/null; then
+      test -f "/profiles/run-${run_idx}/metrics.txt" 2>/dev/null; then
       ready=1
       break
     fi

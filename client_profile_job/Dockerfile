@@ -23,13 +23,13 @@ RUN mkdir -p /app/lib /app/classes \
   && javac --release 21 -cp "/app/lib/*" -d /app/classes /app/ProducerOnce.java \
   && jar cfe /app/producer.jar ProducerOnce -C /app/classes .
 
-# async-profiler 다운로드
-RUN curl -L -o /tmp/async-profiler.tgz \
-    "https://github.com/async-profiler/async-profiler/releases/download/v${ASYNC_PROFILER_VERSION}/async-profiler-${ASYNC_PROFILER_VERSION}-${ASYNC_PROFILER_ARCH}.tar.gz" \
-  && mkdir -p /async-profiler \
-  && tar -xzf /tmp/async-profiler.tgz -C /tmp \
-  && mv "/tmp/async-profiler-${ASYNC_PROFILER_VERSION}-${ASYNC_PROFILER_ARCH}"/* /async-profiler/ \
-  && rm -rf /tmp/async-profiler.tgz "/tmp/async-profiler-${ASYNC_PROFILER_VERSION}-${ASYNC_PROFILER_ARCH}"
+# # async-profiler 다운로드
+# RUN curl -L -o /tmp/async-profiler.tgz \
+#     "https://github.com/async-profiler/async-profiler/releases/download/v${ASYNC_PROFILER_VERSION}/async-profiler-${ASYNC_PROFILER_VERSION}-${ASYNC_PROFILER_ARCH}.tar.gz" \
+#   && mkdir -p /async-profiler \
+#   && tar -xzf /tmp/async-profiler.tgz -C /tmp \
+#   && mv "/tmp/async-profiler-${ASYNC_PROFILER_VERSION}-${ASYNC_PROFILER_ARCH}"/* /async-profiler/ \
+#   && rm -rf /tmp/async-profiler.tgz "/tmp/async-profiler-${ASYNC_PROFILER_VERSION}-${ASYNC_PROFILER_ARCH}"
 
 # 실행 스크립트
 COPY entrypoint.sh /entrypoint.sh
