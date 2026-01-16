@@ -32,6 +32,7 @@ RUN curl -L -o /tmp/async-profiler.tgz \
   && rm -rf /tmp/async-profiler.tgz "/tmp/async-profiler-${ASYNC_PROFILER_VERSION}-${ASYNC_PROFILER_ARCH}"
 
 # 실행 스크립트
+COPY custom_profile.jfc /custom_profile.jfc
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
