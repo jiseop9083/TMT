@@ -11,7 +11,7 @@ import java.util.concurrent.TimeUnit;
 public class ProducerOnce {
     public static void main(String[] args) throws Exception {
         Properties props = new Properties();
-        props.put("bootstrap.servers", "localhost:9092");
+        props.put("bootstrap.servers", "my-cluster-kafka-bootstrap:9092");
         props.put("key.serializer", "org.apache.kafka.common.serialization.StringSerializer");
         props.put("value.serializer", "org.apache.kafka.common.serialization.StringSerializer");
         String acks = System.getenv().getOrDefault("ACKS", "1");
