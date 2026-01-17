@@ -1,0 +1,46 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bench-scripts
+  namespace: kafka
+data:
+  run-producer.sh: |
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    TOPIC="${TOPIC:-test-topic}"
+    NUM_RECORDS="${NUM_RECORDS:-3000000}"
+    RECORD_SIZE="${RECORD_SIZE:-10240}"
+    THROUGHPUT="${THROUGHPUT:-10000}"
+
+    BOOTSTRAP="${BOOTSTRAP:-my-cluster-kafka-bootstrap.strimzi.svc:9092}"
+
+    ACKS="${ACKS:-all}"
+    LINGER_MS="${LINGER_MS:-0}"
+    COMPRESSION="${COMPRESSION:-none}"
+
+    # Kafka binary path per image
+    if [[ -n "${KAFKA_BIN:-}" ]]; then
+      KAFKA_BIN="${KAFKA_BIN}"
+    elif [[ -x /opt/kafka/bin/kafka-producer-perf-test.sh ]]; then
+      KAFKA_BIN="/opt/kafka/bin"
+    else
+      KAFKA_BIN="/opt/bitnami/kafka/bin"
+    fi
+
+    echo "[bench] BOOTSTRAP=${BOOTSTRAP}"
+    echo "[bench] TOPIC=${TOPIC} NUM_RECORDS=${NUM_RECORDS} RECORD_SIZE=${RECORD_SIZE} THROUGHPUT=${THROUGHPUT}"
+    echo "[bench] ACKS=${ACKS} LINGER_MS=${LINGER_MS} COMPRESSION=${COMPRESSION}"
+
+    exec "${KAFKA_BIN}/kafka-producer-perf-test.sh" \
+      --topic "${TOPIC}" \
+      --num-records "${NUM_RECORDS}" \
+      --record-size "${RECORD_SIZE}" \
+      --throughput "${THROUGHPUT}" \
+      --producer-props \
+        "bootstrap.servers=${BOOTSTRAP}" \
+        "acks=${ACKS}" \
+        "linger.ms=${LINGER_MS}" \
+        "compression.type=${COMPRESSION}" \
+        | awk '{ print strftime("%Y-%m-%d %H:%M:%S"), $0 }' \
+        | tee "/tmp/producer-perf-$(date +%s).log"
