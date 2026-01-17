@@ -23,6 +23,16 @@ echo "RUN_DIR=${RUN_DIR}, RUN_TS=${RUN_TS}"
 export RUN_DIR
 export RUN_TS
 
+echo "=== 5Gbps 네트워크 제한 적용 중 ==="
+
+# eth0 속도 제한
+tc qdisc add dev eth0 root handle 1: htb default 10
+tc class add dev eth0 parent 1: classid 1:10 htb rate 5gbit ceil 5gbit
+
+tc qdisc show dev eth0
+echo "=== 제한 완료 ==="
+
+
 # stdout/stderr를 파일로도 남긴다
 exec > >(tee -a "${RUN_DIR}/app.log") 2>&1
 

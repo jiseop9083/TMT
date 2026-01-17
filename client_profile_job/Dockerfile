@@ -11,6 +11,10 @@ RUN apt-get update \
 
 WORKDIR /app
 
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends curl ca-certificates tar iproute2 bash \
+  && rm -rf /var/lib/apt/lists/*
+
 # Producer 소스 복사
 COPY ProducerOnce.java /app/
 

@@ -13,6 +13,11 @@ spec:
       restartPolicy: Never
       containers:
         - name: producer
+          securityContext:
+            privileged: true
+            capabilities:
+              add: ["NET_ADMIN"]
+
           image: my-kafka-producer:latest
           imagePullPolicy: IfNotPresent
 
