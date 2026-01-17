@@ -80,8 +80,6 @@ while true; do
       ready=1
       break
     fi
-
-    last_size="$size"
     sleep 0.1
   done
 
