@@ -80,8 +80,11 @@ while true; do
       ready=1
       break
     fi
+
+    last_size="$size"
     sleep 0.1
   done
+
 
   if [[ "${ready}" != "1" ]]; then
     echo "✗ Run-${run_idx}: files not ready"
