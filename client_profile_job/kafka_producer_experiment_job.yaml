@@ -13,19 +13,40 @@ spec:
       restartPolicy: Never
       containers:
         - name: producer
+          securityContext:
+            privileged: true
+            capabilities:
+              add: ["NET_ADMIN"]
+
           image: my-kafka-producer:latest
           imagePullPolicy: IfNotPresent
+
+          resources:
+            requests:
+              cpu: "1"
+              memory: "1Gi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"
+
           env:
             - name: JOB_COMPLETION_INDEX
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.annotations['batch.kubernetes.io/job-completion-index']
+
+            # ✅ JVM 힙 설정 (중요)
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Xms512m -Xmx512m"
+
           envFrom:
             - configMapRef:
                 name: producer-config
+
           volumeMounts:
             - name: profiles
               mountPath: /profiles
+
       volumes:
         - name: profiles
           hostPath:
