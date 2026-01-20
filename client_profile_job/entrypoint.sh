@@ -48,10 +48,14 @@ exec > >(tee -a "${RUN_DIR}/app.log") 2>&1
 #   echo "async-profiler start_ms=${PROF_START_MS}, timeout_s=${ASYNC_DURATION:-0}"
 # fi
 
+PROFILE_PATH=/custom_profile.jfc
 java \
+  -XX:+UnlockDiagnosticVMOptions \
+  -XX:+DebugNonSafepoints \
+  -XX:FlightRecorderOptions=stackdepth=256 \
+  -XX:StartFlightRecording=settings=${PROFILE_PATH},filename=${RUN_DIR}/jfr.jfr,dumponexit=true \
   -cp "/app/*:/app/lib/*" \
   ProducerOnce
-exit_code=$?
 # if [[ -n "${PROF_START_MS}" ]]; then
 #   PROF_END_MS="$(date +%s%3N)"
 #   PROF_ELAPSED_MS="$((PROF_END_MS - PROF_START_MS))"

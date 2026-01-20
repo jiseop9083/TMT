@@ -129,6 +129,6 @@ public class ProducerOnce {
         Files.write(metricsPath, metrics.getBytes(StandardCharsets.UTF_8));
 
         // profiler flush 여유
-        Thread.sleep(postSendSleepMs);
+        // Thread.sleep(postSendSleepMs);
     }
 }

@@ -116,13 +116,13 @@ while true; do
   ready=0
   for _ in {1..150}; do
     if kubectl exec -n "${NS}" -c producer "${POD_NAME}" -- \
-      test -f "/profiles/run-${run_idx}/metrics.txt" 2>/dev/null; then
+      sh -c 'test -f "/profiles/run-'${run_idx}'/metrics.txt" \
+            -a -f "/profiles/run-'${run_idx}'/jfr.jfr"' 2>/dev/null; then
       ready=1
       break
     fi
     sleep 0.1
   done
-
 
   if [[ "${ready}" != "1" ]]; then
     echo "✗ Run-${run_idx}: files not ready"
