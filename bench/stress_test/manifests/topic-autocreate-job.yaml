@@ -23,8 +23,6 @@ spec:
               value: "my-cluster-kafka-bootstrap.kafka.svc:9092"
             - name: TOPIC_PREFIX
               value: "autocreate-test"
-            - name: ASYNC_PROFILER_DIR
-              value: "/opt/async-profiler"
             - name: JAVA_TOOL_OPTIONS
               value: "-Djava.io.tmpdir=/tmp"
             - name: POD_NAME

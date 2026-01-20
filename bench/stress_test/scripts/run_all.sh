@@ -21,24 +21,7 @@ COMPRESSION="${COMPRESSION:-none}"
 # Profiling params
 JFR_NAME="${JFR_NAME:-bench}"
 JFR_SETTINGS="${JFR_SETTINGS:-profile}"          # profile recommended (JDK default)
-ASYNC_DURATION="${ASYNC_DURATION:-60}"           # seconds, short sampling
-ASYNC_EVENT="${ASYNC_EVENT:-cpu}"                # cpu|alloc|lock, etc
-ASYNC_FALLBACK_EVENT="${ASYNC_FALLBACK_EVENT:-itimer}"  # fallback when permissions are missing
-ASYNC_OUT="${ASYNC_OUT:-/tmp/async-profiler.html}"
 JFR_OUT="${JFR_OUT:-/tmp/bench.jfr}"
-
-# Local async-profiler path (you must have it locally; no internet assumed)
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DEFAULT_ASYNC_LOCAL_DIR="${SCRIPT_DIR}/async-profiler"
-ASYNC_LOCAL_DIR="${ASYNC_LOCAL_DIR:-${DEFAULT_ASYNC_LOCAL_DIR}}"
-if [[ -z "${ASYNC_LOCAL_DIR}" || ! -d "${ASYNC_LOCAL_DIR}" ]]; then
-  ASYNC_LOCAL_DIR="${DEFAULT_ASYNC_LOCAL_DIR}"
-fi
-# Normalize Windows path for tar in Git Bash/MSYS if available
-if command -v cygpath >/dev/null 2>&1; then
-  ASYNC_LOCAL_DIR="$(cygpath -u "${ASYNC_LOCAL_DIR}")"
-fi
-ASYNC_REMOTE_DIR="/tmp/async-profiler"
 
 # Output dir
 TS="$(date +%Y%m%d_%H%M%S)"
@@ -63,10 +46,6 @@ if is_windows; then
   export MSYS2_ARG_CONV_EXCL="*"
 fi
 need_cmd kubectl
-TAR_BIN="tar"
-if [[ -x /usr/bin/tar ]]; then
-  TAR_BIN="/usr/bin/tar"
-fi
 
 apply_manifests() {
   local manifests_dir
@@ -102,30 +81,6 @@ get_kafka_pid() {
     "jcmd -l 2>/dev/null | awk '/kafka\\.Kafka/ {print \$1; exit}'"
 }
 
-ensure_async_profiler_on_pod() {
-  local pod="$1"
-
-  echo "[info] async-profiler dir=${ASYNC_LOCAL_DIR}"
-  if [[ ! -d "${ASYNC_LOCAL_DIR}" ]]; then
-    echo "[error] async-profiler dir not found: ${ASYNC_LOCAL_DIR}" >&2
-    exit 1
-  fi
-  if [[ ! -f "${ASYNC_LOCAL_DIR}/asprof" ]]; then
-    echo "[error] async-profiler not found at: ${ASYNC_LOCAL_DIR}/asprof" >&2
-    echo "[hint] download async-profiler release locally and extract into ${ASYNC_LOCAL_DIR}" >&2
-    exit 1
-  fi
-
-  # copy directory to pod
-  echo "[info] copying async-profiler to broker pod..."
-  kubectl exec -n "${NS}" "${pod}" -- bash -lc "rm -rf '${ASYNC_REMOTE_DIR}' && mkdir -p '${ASYNC_REMOTE_DIR}'"
-  # Copy directory contents via tar to avoid kubectl cp path parsing on Windows
-  "${TAR_BIN}" -C "${ASYNC_LOCAL_DIR}" -cf - . | \
-    kubectl exec -i -n "${NS}" "${pod}" -- tar -C "${ASYNC_REMOTE_DIR}" -xf -
-  # Fix execute permissions
-  kubectl exec -n "${NS}" "${pod}" -- bash -lc "chmod +x '${ASYNC_REMOTE_DIR}/asprof' || true"
-}
-
 start_jfr() {
   local pod="$1" pid="$2"
   echo "[info] starting JFR on ${pod} (pid=${pid})..."
@@ -139,52 +94,6 @@ stop_jfr() {
   # On stop, dump to filename and finish
   kubectl exec -n "${NS}" "${pod}" -- bash -lc \
     "jcmd '${pid}' JFR.stop name='${JFR_NAME}' filename='${JFR_OUT}' || true"
-}
-
-run_async_profiler_window() {
-  local pod="$1" pid="$2"
-  echo "[info] running async-profiler window: event=${ASYNC_EVENT}, duration=${ASYNC_DURATION}s"
-  # Use nohup to run in background (less sensitive to kubectl exec session)
-  kubectl exec -n "${NS}" "${pod}" -- bash -lc "
-    set -e
-    PROF='${ASYNC_REMOTE_DIR}/asprof'
-    PROF_DIR='${ASYNC_REMOTE_DIR}'
-    export LD_LIBRARY_PATH=\"\$PROF_DIR:\$PROF_DIR/lib:\${LD_LIBRARY_PATH:-}\"
-    nohup \"\$PROF\" -e '${ASYNC_EVENT}' -d '${ASYNC_DURATION}' -f '${ASYNC_OUT}' '${pid}' >/tmp/async-profiler.log 2>&1 &
-    echo \$! > /tmp/async-profiler.nohup.pid
-  "
-}
-
-async_profiler_failed() {
-  local pod="$1"
-  kubectl exec -n "${NS}" "${pod}" -- bash -lc \
-    "test -f /tmp/async-profiler.log && grep -E -i 'perf_event_open|Operation not permitted|No permission|Failed to open|not supported|Profiler failed|cannot open shared object file' /tmp/async-profiler.log >/dev/null 2>&1"
-}
-
-print_async_profiler_log() {
-  local pod="$1"
-  echo "[warn] async-profiler log from pod ${pod}:"
-  kubectl exec -n "${NS}" "${pod}" -- bash -lc "cat /tmp/async-profiler.log || true"
-}
-
-run_async_profiler_with_fallback() {
-  local pod="$1" pid="$2"
-  run_async_profiler_window "${pod}" "${pid}"
-  sleep 2
-  if async_profiler_failed "${pod}"; then
-    print_async_profiler_log "${pod}"
-    if [[ "${ASYNC_EVENT}" != "${ASYNC_FALLBACK_EVENT}" ]]; then
-      echo "[warn] async-profiler failed with event=${ASYNC_EVENT}; retrying with ${ASYNC_FALLBACK_EVENT}"
-      kubectl exec -n "${NS}" "${pod}" -- bash -lc "
-        set -e
-        PROF='${ASYNC_REMOTE_DIR}/asprof'
-        PROF_DIR='${ASYNC_REMOTE_DIR}'
-        export LD_LIBRARY_PATH=\"\$PROF_DIR:\$PROF_DIR/lib:\${LD_LIBRARY_PATH:-}\"
-        nohup \"\$PROF\" -e '${ASYNC_FALLBACK_EVENT}' -d '${ASYNC_DURATION}' -f '${ASYNC_OUT}' '${pid}' >/tmp/async-profiler.log 2>&1 &
-        echo \$! > /tmp/async-profiler.nohup.pid
-      "
-    fi
-  fi
 }
 run_load() {
   echo "[info] running producer-perf-test from loader pod..."
@@ -206,8 +115,6 @@ collect_artifacts() {
   local pod="$1"
   echo "[info] collecting artifacts..."
   kubectl cp -n "${NS}" "${pod}:${JFR_OUT}" "${OUTDIR}/bench.jfr" || true
-  kubectl cp -n "${NS}" "${pod}:${ASYNC_OUT}" "${OUTDIR}/async-profiler.html" || true
-  kubectl cp -n "${NS}" "${pod}:/tmp/async-profiler.log" "${OUTDIR}/async-profiler.log" || true
 }
 
 # ----------------------------
@@ -228,10 +135,6 @@ echo "[info] kafka pid=${PID}"
 
 # JFR: long-running over the whole load
 start_jfr "${BROKER_POD}" "${PID}"
-
-# async-profiler: short sampling window during the run
-ensure_async_profiler_on_pod "${BROKER_POD}"
-run_async_profiler_with_fallback "${BROKER_POD}" "${PID}"
 
 # Load generation
 run_load
