@@ -69,7 +69,6 @@ kubectl apply -n "${NS}" -f "${CONFIG_MANIFEST}"
 # Job 100개를 순차적으로 실행
 for job_num in $(seq 1 ${NUM_JOBS}); do
   JOB_NAME="kafka-producer-experiment-${job_num}"
-  # Job별 오프셋 계산 (0-based)
   OFFSET=$(( (job_num - 1) * RUNS_PER_JOB ))
   
   echo ""
@@ -78,10 +77,8 @@ for job_num in $(seq 1 ${NUM_JOBS}); do
   echo "Global index range: $((OFFSET + 1)) ~ $((OFFSET + RUNS_PER_JOB))"
   echo "========================================="
   
-  # 기존 Job 삭제
   kubectl delete job -n "${NS}" "${JOB_NAME}" --ignore-not-found
   
-  # Job 생성 (AUTO_CREATE_TOPICS 환경변수 주입)
   sed \
   -e "s/^  name: kafka-producer-experiment/  name: ${JOB_NAME}/" \
   -e "s/^  completions: .*/  completions: ${RUNS_PER_JOB}/" \
@@ -89,85 +86,77 @@ for job_num in $(seq 1 ${NUM_JOBS}); do
   -e "/- name: JOB_INDEX_OFFSET/,/value:/ s/value: \"0\"/value: \"${OFFSET}\"/" \
   "${JOB_TEMPLATE}" | kubectl apply -n "${NS}" -f -
 
-  
-  # 이 Job의 완료를 기다리며 결과 수집
   last_idx=-1
   completed_count=0
   
+  # 수집 루프 시작
   while [[ ${completed_count} -lt ${RUNS_PER_JOB} ]]; do
     JOB_STATUS=$(kubectl get job -n "${NS}" "${JOB_NAME}" \
       -o jsonpath='{.status.conditions[?(@.type=="Complete")].status}' 2>/dev/null || true)
-    
-    if [[ "${JOB_STATUS}" == "True" ]]; then
-      break
-    fi
     
     POD_NAME=$(kubectl get pods -n "${NS}" -l job-name="${JOB_NAME}" \
       --field-selector=status.phase=Running \
       -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
     
     if [[ -z "${POD_NAME}" ]]; then
-      sleep 0.2
-      continue
+      # Job이 이미 끝났는데 수집 못한 파일이 있는지 체크
+      if [[ "${JOB_STATUS}" == "True" && ${completed_count} -lt ${RUNS_PER_JOB} ]]; then
+          echo "Job finished but not all files collected. Checking last completed pod..."
+          POD_NAME=$(kubectl get pods -n "${NS}" -l job-name="${JOB_NAME}" \
+            -o jsonpath='{.items[-1].metadata.name}' 2>/dev/null || true)
+          if [[ -z "${POD_NAME}" ]]; then break; fi
+      else
+          sleep 0.5
+          continue
+      fi
     fi
     
     local_idx=$(kubectl get pod -n "${NS}" "${POD_NAME}" \
       -o jsonpath='{.metadata.annotations.batch\.kubernetes\.io/job-completion-index}' 2>/dev/null || true)
     
-    if [[ -z "${local_idx}" || "${local_idx}" == "${last_idx}" ]]; then
-      sleep 0.2
-      continue
-    fi
-    
-    # 전역 인덱스 계산 (1-based)
-    global_idx=$((OFFSET + local_idx + 1))
-    job_dir="${OUTDIR}/kafka-producer-experiment-${global_idx}"
-    mkdir -p "${job_dir}"
-    
-    echo "→ Detected Run-${global_idx}, waiting for files..."
-    
-    # 파일 준비 대기
-    ready=0
-    for _ in {1..150}; do
-      if kubectl exec -n "${NS}" -c producer "${POD_NAME}" -- \
-        sh -c "test -f \"/profiles/run-${global_idx}/metrics.txt\" \
-              -a -f \"/profiles/run-${global_idx}/jfr.jfr\"" 2>/dev/null; then
-        ready=1
-        break
+    # 새로운 인덱스가 감지될 때만 실행
+    if [[ -n "${local_idx}" && "${local_idx}" != "${last_idx}" ]]; then
+      global_idx=$((OFFSET + local_idx + 1))
+      remote_idx=$((local_idx + 1)) # 원격지는 항상 1~10 반복
+      
+      job_dir="${OUTDIR}/kafka-producer-experiment-${global_idx}"
+      mkdir -p "${job_dir}"
+      
+      echo "→ Run-${global_idx} detected. Copying from pod run-${remote_idx}..."
+      
+      # 파일 존재 확인 및 대기
+      ready=0
+      for _ in {1..150}; do
+        if kubectl exec -n "${NS}" -c producer "${POD_NAME}" -- \
+          sh -c "test -f \"/profiles/run-${remote_idx}/metrics.txt\"" 2>/dev/null; then
+          ready=1
+          break
+        fi
+        sleep 0.2
+      done
+      
+      if [[ "${ready}" == "1" ]]; then
+        if kubectl cp -n "${NS}" -c producer "${POD_NAME}:/profiles/run-${remote_idx}" "${job_dir}" 2>/dev/null; then
+          echo "✓ Run-${global_idx} copied successfully."
+          # 복사 후 삭제 (용량 확보 및 중복 방지)
+          kubectl exec -n "${NS}" -c producer "${POD_NAME}" -- rm -rf "/profiles/run-${remote_idx}"
+          completed_count=$((completed_count + 1))
+          last_idx="${local_idx}"
+        else
+          echo "✗ Run-${global_idx} copy failed."
+        fi
       fi
-      sleep 0.1
-    done
-    
-    if [[ "${ready}" != "1" ]]; then
-      echo "✗ Run-${global_idx}: files not ready"
-      last_idx="${local_idx}"
-      continue
     fi
-    
-    # kubectl cp 재시도
-    copied=0
-    for _ in {1..3}; do
-      if kubectl cp -n "${NS}" -c producer \
-        "${POD_NAME}:/profiles/run-${global_idx}" "${job_dir}" 2>/dev/null; then
-        copied=1
-        break
-      fi
-      sleep 0.2
-    done
-    
-    if [[ "${copied}" == "1" ]]; then
-      completed_count=$((completed_count + 1))
-      echo "✓ Run-${global_idx}/${TOTAL_RUNS} (Job ${job_num}: ${completed_count}/${RUNS_PER_JOB})"
-    else
-      echo "✗ Run-${global_idx}/${TOTAL_RUNS}: copy failed"
+
+    # Job 상태가 Complete이고 모든 파일 수집 시 탈출
+    if [[ "${JOB_STATUS}" == "True" && ${completed_count} -ge ${RUNS_PER_JOB} ]]; then
+      break
     fi
-    
-    last_idx="${local_idx}"
-    sleep 0.2
-  done
+    sleep 0.5
+  done 
   
-  echo "Job ${job_num}/${NUM_JOBS} completed"
-done
+  echo "Job ${job_num}/${NUM_JOBS} completed."
+done 
 
 echo ""
 echo "========================================="

@@ -61,7 +61,8 @@ public class ProducerOnce {
             System.getenv().getOrDefault("NUM_MESSAGES", "5")
         );
         
-        String runDir = "/profiles/run-" + globalIdx;
+        int writeIdx = localIdx + 1;
+        String runDir = "/profiles/run-" + writeIdx;
         String runTs = System.getenv().getOrDefault("RUN_TS", "unknown");
         Path metricsPath = Path.of(runDir, "metrics.txt");
 
