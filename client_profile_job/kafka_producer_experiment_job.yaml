@@ -3,11 +3,11 @@ kind: Job
 metadata:
   name: kafka-producer-experiment
 spec:
-  completions: 5
+  completions: 10  # 각 Job당 10개 완료
   completionMode: Indexed
-  parallelism: 1
+  parallelism: 1   # 순차 실행
   backoffLimit: 3
-  ttlSecondsAfterFinished: 300
+  ttlSecondsAfterFinished: 0
   template:
     spec:
       restartPolicy: Never
@@ -30,12 +30,18 @@ spec:
               memory: "1Gi"
 
           env:
+            # Pod의 로컬 인덱스 (0-based, 0~9)
             - name: JOB_COMPLETION_INDEX
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.annotations['batch.kubernetes.io/job-completion-index']
-
-            # ✅ JVM 힙 설정 (중요)
+            
+            # Job별 오프셋 (bash 스크립트에서 sed로 주입됨)
+            # Job 1: 0, Job 2: 10, Job 3: 20, ..., Job 100: 990
+            - name: JOB_INDEX_OFFSET
+              value: "0"
+            - name: AUTO_CREATE_TOPICS
+              value: "REPLACE_AUTO_CREATE_TOPICS"  # Placeholder 추가
             - name: JAVA_TOOL_OPTIONS
               value: "-Xms512m -Xmx512m"
 

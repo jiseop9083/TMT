@@ -63,27 +63,26 @@
 
   <event name="jdk.ThreadSleep">
     <setting name="enabled">true</setting>
-    <setting name="threshold">10 ms</setting>
+    <setting name="threshold">1 ms</setting>
     <setting name="stackTrace">true</setting>
   </event>
 
   <!-- Socket I/O (threshold-based) -->
   <event name="jdk.SocketRead">
     <setting name="enabled">true</setting>
-    <setting name="threshold">1 ms</setting>
-    <setting name="stackTrace">true</setting>
+    <setting name="threshold">200 us</setting>
+    <setting name="stackTrace">false</setting>
   </event>
 
   <event name="jdk.SocketWrite">
     <setting name="enabled">true</setting>
-    <setting name="threshold">1 ms</setting>
-    <setting name="stackTrace">true</setting>
+    <setting name="threshold">200 us</setting>
+    <setting name="stackTrace">false</setting>
   </event>
 
   <!-- CPU (원인 범주 분리용) -->
   <event name="jdk.CPULoad">
     <setting name="enabled">true</setting>
-    <setting name="period">2 s</setting>
   </event>
 
 </configuration>

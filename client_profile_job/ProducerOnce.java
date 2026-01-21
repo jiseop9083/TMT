@@ -37,14 +37,17 @@ public class ProducerOnce {
         props.put("delivery.timeout.ms", Long.toString(deliveryTimeoutMs));
         props.put("max.block.ms", Long.toString(maxBlockMs));
 
-        int idx = Integer.parseInt(
-            System.getenv().getOrDefault(
-                "RUN_INDEX",
-                System.getenv().getOrDefault("JOB_COMPLETION_INDEX", "0")
-            )
-        );
-
-        String topic = "test_topic_" + (idx + 1);
+        // JOB_INDEX_OFFSET + JOB_COMPLETION_INDEX로 전역 인덱스 계산
+        String offsetStr = System.getenv("JOB_INDEX_OFFSET");
+        int offset = (offsetStr == null || offsetStr.isEmpty()) ? 0 : Integer.parseInt(offsetStr);
+        
+        String localIdxStr = System.getenv("JOB_COMPLETION_INDEX");
+        int localIdx = (localIdxStr == null || localIdxStr.isEmpty()) ? 0 : Integer.parseInt(localIdxStr);
+        
+        // 전역 인덱스 (1-based): offset은 0-based, localIdx도 0-based
+        int globalIdx = offset + localIdx + 1;
+        
+        String topic = "test_topic_" + globalIdx;
 
         String largeValue = "x".repeat(10000000) + "\n"; // 10MB 메시지
 
@@ -58,14 +61,16 @@ public class ProducerOnce {
             System.getenv().getOrDefault("NUM_MESSAGES", "5")
         );
         
-        String runDir = System.getenv().getOrDefault("RUN_DIR", "/profiles/run-0");
+        int writeIdx = localIdx + 1;
+        String runDir = "/profiles/run-" + writeIdx;
         String runTs = System.getenv().getOrDefault("RUN_TS", "unknown");
-        Path metricsPath = Path.of(runDir, "metrics" + ".txt");
+        Path metricsPath = Path.of(runDir, "metrics.txt");
 
         // async-profiler attach 대기
         // Thread.sleep(startDelayMs);
 
         System.out.println("producer_start topic=" + topic
+            + " global_index=" + globalIdx
             + " payload_bytes=" + largeValue.length()
             + " num_messages=" + numMessages
             + " send_ack_timeout_ms=" + sendAckTimeoutMs);
@@ -118,6 +123,7 @@ public class ProducerOnce {
 
         String metrics = ""
             + "timestamp=" + Instant.now() + "\n"
+            + "global_index=" + globalIdx + "\n"
             + "topic=" + topic + "\n"
             + "payload_bytes=" + largeValue.length() + "\n"
             + "num_messages=" + numMessages + "\n"
