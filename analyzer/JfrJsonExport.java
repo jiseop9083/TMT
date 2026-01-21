@@ -98,8 +98,8 @@ public class JfrJsonExport {
             throw new IllegalStateException("No experiment directories found under " + runDir);
         }
 
-        Path analysisDir = runDir.resolve("analysis");
-        Files.createDirectories(analysisDir);
+        Path jsonDir = runDir.resolve("analysis").resolve("json");
+        Files.createDirectories(jsonDir);
 
         for (Path expDir : expDirs) {
             Path jfrPath = findJfr(expDir);
@@ -108,11 +108,11 @@ public class JfrJsonExport {
             }
             String baseName = baseName(jfrPath.getFileName().toString());
             String outName = expDir.getFileName() + "-" + baseName + ".json";
-            Path outPath = analysisDir.resolve(outName);
+            Path outPath = jsonDir.resolve(outName);
             runJfrPrint(jfrPath, outPath, events);
         }
 
-        System.out.println("Wrote analysis JSONs to " + analysisDir);
+        System.out.println("Wrote analysis JSONs to " + jsonDir);
     }
 
     private static String baseName(String name) {
