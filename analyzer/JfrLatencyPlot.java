@@ -19,6 +19,7 @@ import java.util.Map;
 import javax.imageio.ImageIO;
 
 public class JfrLatencyPlot {
+    // CSV 한 행의 지표를 담는 데이터 컨테이너
     static class Row {
         final double topicCount;
         final double producerE2eMs;
@@ -33,6 +34,7 @@ public class JfrLatencyPlot {
         }
     }
 
+    // 분석 결과 CSV를 읽어 지연 플롯 이미지를 생성하는 엔트리 포인트
     public static void main(String[] args) throws Exception {
         System.setProperty("java.awt.headless", "true");
 
@@ -91,6 +93,7 @@ public class JfrLatencyPlot {
         System.out.println("Wrote plots to " + plotDir);
     }
 
+    // latency_breakdown.csv에서 필요한 컬럼만 읽어 Row 리스트를 만든다
     static List<Row> readLatencyRows(Path csvPath) throws IOException {
         List<Row> rows = new ArrayList<>();
         try (BufferedReader reader = Files.newBufferedReader(csvPath)) {
@@ -119,6 +122,7 @@ public class JfrLatencyPlot {
         return rows;
     }
 
+    // z-score 기준으로 이상치를 제거한다
     static List<Row> filterByZscore(List<Row> rows, double threshold) {
         if (rows.isEmpty()) {
             return rows;
@@ -145,6 +149,7 @@ public class JfrLatencyPlot {
 
     enum Metric { E2E, PRODUCE_COMPLETION, WAIT_ON_METADATA }
 
+    // 선택한 지표의 평균/표준편차를 계산한다
     static Stats stats(List<Row> rows, Metric metric) {
         double sum = 0.0;
         double sumSq = 0.0;
@@ -168,6 +173,7 @@ public class JfrLatencyPlot {
         return new Stats(mean, stddev, n);
     }
 
+    // z-score로 이상치 여부를 판정한다
     static boolean isOutlier(double value, Stats stats, double threshold) {
         if (stats.stddev <= 0.0) {
             return false;
@@ -176,6 +182,7 @@ public class JfrLatencyPlot {
         return Math.abs(z) > threshold;
     }
 
+    // 평균/표준편차/표본 수를 보관하는 구조체
     static class Stats {
         final double mean;
         final double stddev;
@@ -188,6 +195,7 @@ public class JfrLatencyPlot {
         }
     }
 
+    // CSV 파트에서 숫자를 안전하게 파싱한다
     static double parseDouble(String[] parts, Map<String, Integer> idx, String key) {
         Integer i = idx.get(key);
         if (i == null || i < 0 || i >= parts.length) {
@@ -204,6 +212,7 @@ public class JfrLatencyPlot {
         }
     }
 
+    // E2E 지연 산포도를 저장한다
     static void plotE2eLatency(List<Row> rows, Path outPath) throws IOException {
         List<Double> xs = new ArrayList<>();
         List<Double> ys = new ArrayList<>();
@@ -215,6 +224,7 @@ public class JfrLatencyPlot {
         renderScatterPlot(xs, ys, spec, outPath, Color.decode("#2F6BFF"));
     }
 
+    // 메시지 전송/메타데이터 대기 지연을 시리즈로 그린다
     static void plotDelayBreakdown(List<Row> rows, Path outPath) throws IOException {
         List<Double> xs = new ArrayList<>();
         List<Double> produceCompletion = new ArrayList<>();
@@ -235,6 +245,7 @@ public class JfrLatencyPlot {
         );
     }
 
+    // 플롯 메타데이터(제목/축 라벨) 묶음
     static class PlotSpec {
         final String title;
         final String xLabel;
@@ -247,12 +258,14 @@ public class JfrLatencyPlot {
         }
     }
 
+    // 단일 시리즈 산포도를 다중 시리즈 렌더러로 위임한다
     static void renderScatterPlot(List<Double> xs, List<Double> ys, PlotSpec spec,
                                   Path outPath, Color color) throws IOException {
         renderMultiSeriesPlot(xs, List.of(ys), List.of("E2E latency"),
                 List.of(color), spec, outPath);
     }
 
+    // 캔버스를 생성하고 축/격자/시리즈를 렌더링한다
     static void renderMultiSeriesPlot(List<Double> xs, List<List<Double>> series,
                                       List<String> labels, List<Color> colors,
                                       PlotSpec spec, Path outPath) throws IOException {
@@ -330,6 +343,7 @@ public class JfrLatencyPlot {
         ImageIO.write(image, "png", outPath.toFile());
     }
 
+    // 축 눈금과 라벨을 그린다
     static void drawAxisTicks(Graphics2D g, int left, int top, int plotWidth, int plotHeight,
                               double minX, double maxX, double minY, double maxY) {
         g.setFont(new Font("SansSerif", Font.PLAIN, 11));
@@ -354,6 +368,7 @@ public class JfrLatencyPlot {
         }
     }
 
+    // 값 크기에 따라 적절한 소수점 자릿수로 표시한다
     static String formatTick(double value) {
         if (Math.abs(value) >= 1000) {
             return String.format(Locale.ROOT, "%.0f", value);
@@ -367,6 +382,7 @@ public class JfrLatencyPlot {
         return String.format(Locale.ROOT, "%.3f", value);
     }
 
+    // 리스트 최소값(빈 경우 0)을 계산한다
     static double min(List<Double> values) {
         double min = Double.POSITIVE_INFINITY;
         for (double v : values) {
@@ -375,6 +391,7 @@ public class JfrLatencyPlot {
         return min == Double.POSITIVE_INFINITY ? 0.0 : min;
     }
 
+    // 리스트 최대값(빈 경우 1)을 계산한다
     static double max(List<Double> values) {
         double max = Double.NEGATIVE_INFINITY;
         for (double v : values) {
@@ -383,6 +400,7 @@ public class JfrLatencyPlot {
         return max == Double.NEGATIVE_INFINITY ? 1.0 : max;
     }
 
+    // 여러 시리즈 중 최대값을 구한다
     static double maxSeries(List<List<Double>> series) {
         double max = Double.NEGATIVE_INFINITY;
         for (List<Double> values : series) {
@@ -391,6 +409,7 @@ public class JfrLatencyPlot {
         return max == Double.NEGATIVE_INFINITY ? 1.0 : max;
     }
 
+    // 실행 결과 디렉터리(YYYY... 형식)를 찾아 반환한다
     static Path findRunDir(Path base) throws IOException {
         if (Files.isDirectory(base) && base.getFileName().toString().startsWith("202")) {
             return base;

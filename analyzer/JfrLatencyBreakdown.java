@@ -23,6 +23,7 @@ import jdk.jfr.consumer.RecordingFile;
 
 public class JfrLatencyBreakdown {
 
+    // 분석에 포함할 JFR 이벤트 목록
     static final Set<String> TARGET_EVENTS = Set.of(
             "jdk.ThreadPark",
             "jdk.JavaMonitorEnter",
@@ -41,6 +42,7 @@ public class JfrLatencyBreakdown {
     static final String FUTURE_RECORD_METADATA_CLASS =
             "org.apache.kafka.clients.producer.internals.FutureRecordMetadata";
 
+    // 이벤트 집계 결과를 담는 구조체
     static class EventTotals {
         long waitOnMetadataNanos;
         long produceCompletionNanos;
@@ -58,6 +60,7 @@ public class JfrLatencyBreakdown {
         final List<Double> cpuMachineTotals = new ArrayList<>();
     }
 
+    // 실행 디렉터리의 JFR을 집계하고 CSV로 저장한다
     public static void main(String[] args) throws Exception {
         String outDirArg = "client_profile_job/out";
 
@@ -143,6 +146,7 @@ public class JfrLatencyBreakdown {
         System.out.println("Wrote analysis CSVs to " + analysisDir);
     }
 
+    // JFR을 읽어 대상 이벤트만 JSONL로 내보낸다
     static void writeEventsJson(Path jfr, Path outJson) throws IOException {
         try (BufferedWriter writer = Files.newBufferedWriter(outJson);
              RecordingFile rf = new RecordingFile(jfr)) {
@@ -187,6 +191,7 @@ public class JfrLatencyBreakdown {
         }
     }
 
+    // JSONL 이벤트를 읽어 지연/카운터를 합산한다
     static EventTotals parseEventsJson(Path jsonPath) throws IOException {
         EventTotals totals = new EventTotals();
         try (BufferedReader reader = Files.newBufferedReader(jsonPath)) {
@@ -241,6 +246,7 @@ public class JfrLatencyBreakdown {
         return totals;
     }
 
+    // 스택에 특정 클래스가 포함되는지 확인한다
     static boolean stackContainsClass(List<String> stack, String className) {
         for (String frame : stack) {
             int idx = frame.indexOf('#');
@@ -252,6 +258,7 @@ public class JfrLatencyBreakdown {
         return false;
     }
 
+    // 스택에 특정 클래스 접두사가 포함되는지 확인한다
     static boolean stackContainsClassPrefix(List<String> stack, String classPrefix) {
         for (String frame : stack) {
             int idx = frame.indexOf('#');
@@ -263,10 +270,12 @@ public class JfrLatencyBreakdown {
         return false;
     }
 
+    // 나노초를 밀리초로 변환한다
     static double nanosToMs(long nanos) {
         return nanos / 1_000_000.0;
     }
 
+    // 이벤트 한 건을 JSONL로 기록한다
     static void writeJsonEvent(BufferedWriter writer, String type, long nanos, List<String> stack,
                                Double machineTotal, String threadName)
             throws IOException {
@@ -296,6 +305,7 @@ public class JfrLatencyBreakdown {
         writer.newLine();
     }
 
+    // JSON 문자열용 이스케이프 처리
     static String escapeJson(String value) {
         StringBuilder sb = new StringBuilder(value.length() + 8);
         for (int i = 0; i < value.length(); i++) {
@@ -315,6 +325,7 @@ public class JfrLatencyBreakdown {
         return sb.toString();
     }
 
+    // JSONL 한 줄을 파싱한 결과
     static class JsonLine {
         final String type;
         final long durationNanos;
@@ -332,6 +343,7 @@ public class JfrLatencyBreakdown {
         }
     }
 
+    // JSONL 한 줄에서 필요한 필드만 뽑는다
     static JsonLine parseJsonLine(String line) {
         if (line.isEmpty()) {
             return null;
@@ -347,6 +359,7 @@ public class JfrLatencyBreakdown {
         return new JsonLine(type, nanos, stack, machineTotal, threadName);
     }
 
+    // 지정 키의 문자열 값을 추출한다
     static String extractJsonString(String line, String key) {
         int start = line.indexOf(key);
         if (start < 0) return null;
@@ -369,6 +382,7 @@ public class JfrLatencyBreakdown {
         return null;
     }
 
+    // 지정 키의 long 값을 추출한다
     static long extractJsonLong(String line, String key) {
         int start = line.indexOf(key);
         if (start < 0) return 0L;
@@ -385,6 +399,7 @@ public class JfrLatencyBreakdown {
         }
     }
 
+    // 지정 키의 double 값을 추출한다
     static double extractJsonDouble(String line, String key) {
         int start = line.indexOf(key);
         if (start < 0) return -1.0;
@@ -406,6 +421,7 @@ public class JfrLatencyBreakdown {
         }
     }
 
+    // 평균을 계산한다
     static double average(List<Double> values) {
         if (values.isEmpty()) return 0.0;
         double sum = 0.0;
@@ -415,6 +431,7 @@ public class JfrLatencyBreakdown {
         return sum / values.size();
     }
 
+    // 퍼센타일 값을 계산한다
     static double percentile(List<Double> values, int percentile) {
         if (values.isEmpty()) return 0.0;
         List<Double> sorted = new ArrayList<>(values);
@@ -426,6 +443,7 @@ public class JfrLatencyBreakdown {
         return sorted.get(idx);
     }
 
+    // 최대값을 계산한다
     static double max(List<Double> values) {
         if (values.isEmpty()) return 0.0;
         double max = Double.NEGATIVE_INFINITY;
@@ -437,6 +455,7 @@ public class JfrLatencyBreakdown {
         return max;
     }
 
+    // TLAB 밖 할당 비율을 계산한다
     static double outsideTlabRatio(int inTlab, int outsideTlab) {
         int total = inTlab + outsideTlab;
         if (total <= 0) {
@@ -445,6 +464,7 @@ public class JfrLatencyBreakdown {
         return (double) outsideTlab / total;
     }
 
+    // JFR 필드에서 double을 안전하게 읽는다
     static double safeGetDouble(RecordedEvent e, String field) {
         try {
             return e.getDouble(field);
@@ -453,6 +473,7 @@ public class JfrLatencyBreakdown {
         }
     }
 
+    // JFR 스레드 이름을 안전하게 읽는다
     static String safeGetThreadName(RecordedEvent e, String field) {
         try {
             return e.getThread(field).getJavaName();
@@ -461,10 +482,12 @@ public class JfrLatencyBreakdown {
         }
     }
 
+    // 메인 스레드 여부를 판정한다
     static boolean isMainThread(String threadName) {
         return "main".equals(threadName);
     }
 
+    // JSON 배열(문자열 리스트)을 추출한다
     static List<String> extractJsonStringArray(String line, String key) {
         int start = line.indexOf(key);
         if (start < 0) return Collections.emptyList();
@@ -501,11 +524,13 @@ public class JfrLatencyBreakdown {
         return items;
     }
 
+    // 확장자를 제거한 파일명을 만든다
     static String baseName(String name) {
         int dot = name.lastIndexOf('.');
         return dot > 0 ? name.substring(0, dot) : name;
     }
 
+    // 실행 결과 디렉터리(YYYY... 형식)를 찾아 반환한다
     static Path findRunDir(Path base) throws IOException {
         if (Files.isDirectory(base) && base.getFileName().toString().startsWith("202")) {
             return base;
@@ -528,6 +553,7 @@ public class JfrLatencyBreakdown {
         throw new IOException("No run directories found under " + base);
     }
 
+    // 실험 디렉터리 목록을 찾고 정렬한다
     static List<Path> iterExperimentDirs(Path runDir) throws IOException {
         List<Path> dirs = new ArrayList<>();
         try (DirectoryStream<Path> stream = Files.newDirectoryStream(runDir)) {
@@ -542,6 +568,7 @@ public class JfrLatencyBreakdown {
         return dirs;
     }
 
+    // 실험 디렉터리에서 JFR 파일을 찾는다
     static Path findJfr(Path expDir) throws IOException {
         Path candidate = findFirstMatching(expDir, "producer-", ".jfr");
         if (candidate != null) {
@@ -550,6 +577,7 @@ public class JfrLatencyBreakdown {
         return findFirstMatching(expDir, "", ".jfr");
     }
 
+    // prefix/suffix에 맞는 첫 파일을 찾는다
     static Path findFirstMatching(Path dir, String prefix, String suffix) throws IOException {
         List<Path> matches = new ArrayList<>();
         try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir)) {
@@ -564,6 +592,7 @@ public class JfrLatencyBreakdown {
         return matches.isEmpty() ? null : matches.get(0);
     }
 
+    // metrics 파일을 읽어 key/value로 파싱한다
     static Map<String, String> readMetrics(Path expDir) throws IOException {
         Path metricsPath = findFirstMatching(expDir, "metrics-", ".txt");
         if (metricsPath == null) {
@@ -586,6 +615,7 @@ public class JfrLatencyBreakdown {
         return data;
     }
 
+    // 실험 디렉터리 이름에서 숫자 ID를 파싱한다
     static int parseExperimentId(String name) {
         int idx = name.lastIndexOf('-');
         if (idx < 0 || idx + 1 >= name.length()) return 0;
@@ -596,6 +626,7 @@ public class JfrLatencyBreakdown {
         }
     }
 
+    // 토픽 이름에서 숫자 접미사를 뽑아 토픽 수로 사용한다
     static int inferTopicCount(String topic, int fallback) {
         Pattern pattern = Pattern.compile("(\\d+)$");
         Matcher matcher = pattern.matcher(topic);

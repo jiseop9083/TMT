@@ -8,11 +8,13 @@ import java.util.Comparator;
 import java.util.List;
 
 public class JfrJsonExport {
+    // 기본으로 내보낼 JFR 이벤트 목록
     private static final String DEFAULT_EVENTS =
             "jdk.ThreadPark,jdk.JavaMonitorEnter,jdk.JavaMonitorWait," +
             "jdk.SocketRead,jdk.SocketWrite,jdk.GCPhasePause," +
             "jdk.GarbageCollection,jdk.SafePointWait";
 
+    // 단일 JFR 또는 실행 디렉터리에서 JSON을 생성하는 엔트리 포인트
     public static void main(String[] args) throws Exception {
         if (args.length < 1 || "--help".equals(args[0])) {
             System.out.println(
@@ -57,6 +59,7 @@ public class JfrJsonExport {
         runJfrPrint(jfrPath, outPath, events);
     }
 
+    // jfr print를 실행해 JSON 파일을 생성한다
     private static void runJfrPrint(Path jfrPath, Path outPath, String events)
             throws IOException, InterruptedException {
         List<String> cmd = new ArrayList<>();
@@ -77,6 +80,7 @@ public class JfrJsonExport {
         }
     }
 
+    // 입력 JFR과 같은 위치에 기본 JSON 경로를 만든다
     private static Path defaultOutputPath(Path jfrPath) {
         String name = jfrPath.getFileName().toString();
         int dot = name.lastIndexOf('.');
@@ -84,6 +88,7 @@ public class JfrJsonExport {
         return jfrPath.resolveSibling(base + ".json");
     }
 
+    // 특정 플래그 뒤에 오는 필수 인자를 얻는다
     private static String requireArg(String[] args, int index, String flag) {
         if (index >= args.length) {
             throw new IllegalArgumentException(flag + " requires a value");
@@ -91,6 +96,7 @@ public class JfrJsonExport {
         return args[index];
     }
 
+    // 실행 디렉터리의 모든 실험 JFR을 JSON으로 내보낸다
     private static void exportRunDir(Path base, String events) throws IOException, InterruptedException {
         Path runDir = findRunDir(base);
         List<Path> expDirs = iterExperimentDirs(runDir);
@@ -115,11 +121,13 @@ public class JfrJsonExport {
         System.out.println("Wrote analysis JSONs to " + jsonDir);
     }
 
+    // 확장자를 제거한 파일명을 만든다
     private static String baseName(String name) {
         int dot = name.lastIndexOf('.');
         return dot > 0 ? name.substring(0, dot) : name;
     }
 
+    // 실행 결과 디렉터리(YYYY... 형식)를 찾아 반환한다
     private static Path findRunDir(Path base) throws IOException {
         if (Files.isDirectory(base) && base.getFileName().toString().startsWith("202")) {
             return base;
@@ -142,6 +150,7 @@ public class JfrJsonExport {
         throw new IOException("No run directories found under " + base);
     }
 
+    // 실험 디렉터리 목록을 찾고 정렬한다
     private static List<Path> iterExperimentDirs(Path runDir) throws IOException {
         List<Path> dirs = new ArrayList<>();
         try (DirectoryStream<Path> stream = Files.newDirectoryStream(runDir)) {
@@ -156,6 +165,7 @@ public class JfrJsonExport {
         return dirs;
     }
 
+    // 실험 디렉터리에서 JFR 파일을 찾는다
     private static Path findJfr(Path expDir) throws IOException {
         Path candidate = findFirstMatching(expDir, "producer-", ".jfr");
         if (candidate != null) {
@@ -164,6 +174,7 @@ public class JfrJsonExport {
         return findFirstMatching(expDir, "", ".jfr");
     }
 
+    // prefix/suffix에 맞는 첫 파일을 찾는다
     private static Path findFirstMatching(Path dir, String prefix, String suffix) throws IOException {
         List<Path> matches = new ArrayList<>();
         try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir)) {
