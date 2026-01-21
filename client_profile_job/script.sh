@@ -1,6 +1,42 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+AUTO_CREATE_TOPICS="true"   # default
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --auto-create-topics)
+      AUTO_CREATE_TOPICS="$2"
+      shift 2
+      ;;
+    --auto-create-topics=*)
+      AUTO_CREATE_TOPICS="${1#*=}"
+      shift
+      ;;
+    *)
+      echo "Unknown option: $1"
+      exit 1
+      ;;
+  esac
+done
+
+AUTO_CREATE_TOPICS_LOWER="$(echo "${AUTO_CREATE_TOPICS}" | tr '[:upper:]' '[:lower:]')"
+
+case "${AUTO_CREATE_TOPICS_LOWER}" in
+  false|0|no)
+    AUTO_CREATE_TOPICS="false"
+    ;;
+  true|1|yes)
+    AUTO_CREATE_TOPICS="true"
+    ;;
+  *)
+    echo "Invalid value for --auto-create-topics: ${AUTO_CREATE_TOPICS}"
+    exit 1
+    ;;
+esac
+
+
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${SCRIPT_DIR}"
 
@@ -40,10 +76,14 @@ echo "Starting job (completions=${REPEAT})"
 
 kubectl delete -n "${NS}" "job/${JOB_NAME}" --ignore-not-found
 
-sed -e "s/^  name: kafka-producer-experiment/  name: ${JOB_NAME}/" \
-    -e "s/^  completions: .*/  completions: ${REPEAT}/" \
-    -e "s/^  parallelism: .*/  parallelism: 1/" \
-    "${JOB_TEMPLATE}" | kubectl apply -n "${NS}" -f -
+sed \
+  -e "s/^  name: kafka-producer-experiment/  name: ${JOB_NAME}/" \
+  -e "s/^  completions: .*/  completions: ${REPEAT}/" \
+  -e "s/^  parallelism: .*/  parallelism: 1/" \
+  -e "/^[[:space:]]*env:/a\\
+            - name: AUTO_CREATE_TOPICS\\
+              value: \"${AUTO_CREATE_TOPICS}\"" \
+  "${JOB_TEMPLATE}" | kubectl apply -n "${NS}" -f -
 
 echo "Collecting artifacts..."
 
@@ -74,27 +114,15 @@ while true; do
 
   # 파일 준비 대기
   ready=0
-  last_size=0
-  stable_cnt=0
-
-  for _ in {1..300}; do
-    size=$(kubectl exec -n "${NS}" -c producer "${POD_NAME}" -- \
-      stat -c %s "/profiles/run-${run_idx}/jfr.jfr" 2>/dev/null || echo 0)
-
-    if [[ "$size" -gt 0 && "$size" -eq "$last_size" ]]; then
-      stable_cnt=$((stable_cnt + 1))
-      if [[ "$stable_cnt" -ge 5 ]]; then
-        ready=1
-        break
-      fi
-    else
-      stable_cnt=0
+  for _ in {1..150}; do
+    if kubectl exec -n "${NS}" -c producer "${POD_NAME}" -- \
+      sh -c 'test -f "/profiles/run-'${run_idx}'/metrics.txt" \
+            -a -f "/profiles/run-'${run_idx}'/jfr.jfr"' 2>/dev/null; then
+      ready=1
+      break
     fi
-
-    last_size="$size"
     sleep 0.1
   done
-
 
   if [[ "${ready}" != "1" ]]; then
     echo "✗ Run-${run_idx}: files not ready"

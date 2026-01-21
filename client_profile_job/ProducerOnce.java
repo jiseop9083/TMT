@@ -1,6 +1,8 @@
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.clients.admin.*;
 
+import java.util.Collections;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -44,7 +46,7 @@ public class ProducerOnce {
 
         String topic = "test_topic_" + (idx + 1);
 
-        String largeValue = "x".repeat(10_000_000); // 10MB 메시지
+        String largeValue = "x".repeat(10000000) + "\n"; // 10MB 메시지
 
         long startDelayMs = Long.parseLong(
             System.getenv().getOrDefault("START_DELAY_MS", "3000")
@@ -55,7 +57,7 @@ public class ProducerOnce {
         int numMessages = Integer.parseInt(
             System.getenv().getOrDefault("NUM_MESSAGES", "5")
         );
-
+        
         String runDir = System.getenv().getOrDefault("RUN_DIR", "/profiles/run-0");
         String runTs = System.getenv().getOrDefault("RUN_TS", "unknown");
         Path metricsPath = Path.of(runDir, "metrics" + ".txt");
@@ -69,6 +71,26 @@ public class ProducerOnce {
             + " send_ack_timeout_ms=" + sendAckTimeoutMs);
 
         long initStartNs = System.nanoTime();
+
+        boolean autoCreateTopics =
+            Boolean.parseBoolean(System.getenv().getOrDefault("AUTO_CREATE_TOPICS", "true"));
+
+        if (!autoCreateTopics) {
+            System.out.println("auto.create.topics.enable=false → creating topic explicitly");
+
+            Properties adminProps = new Properties();
+            adminProps.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG,
+                        "my-cluster-kafka-bootstrap:9092");
+
+            try (AdminClient admin = AdminClient.create(adminProps)) {
+                NewTopic newTopic = new NewTopic(topic, 1, (short) 1);
+                admin.createTopics(Collections.singleton(newTopic))
+                    .all()
+                    .get(10, TimeUnit.SECONDS);
+            }
+        }
+
+        
         KafkaProducer<String, String> producer = new KafkaProducer<>(props);
         long initEndNs = System.nanoTime();
 
@@ -107,6 +129,6 @@ public class ProducerOnce {
         Files.write(metricsPath, metrics.getBytes(StandardCharsets.UTF_8));
 
         // profiler flush 여유
-        Thread.sleep(postSendSleepMs);
+        // Thread.sleep(postSendSleepMs);
     }
 }

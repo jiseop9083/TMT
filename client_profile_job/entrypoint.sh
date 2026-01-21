@@ -23,11 +23,31 @@ echo "RUN_DIR=${RUN_DIR}, RUN_TS=${RUN_TS}"
 export RUN_DIR
 export RUN_TS
 
+echo "=== 5Gbps 네트워크 제한 적용 중 ==="
+
+# eth0 속도 제한
+tc qdisc add dev eth0 root handle 1: htb default 10
+tc class add dev eth0 parent 1: classid 1:10 htb rate 5gbit ceil 5gbit
+
+tc qdisc show dev eth0
+echo "=== 제한 완료 ==="
+
+
 # stdout/stderr를 파일로도 남긴다
 exec > >(tee -a "${RUN_DIR}/app.log") 2>&1
 
-# JVM 실행 (JFR은 시작 시점에 활성화)
-# 절대 경로로 실행
+# # JVM 실행 (JFR은 시작 시점에 활성화)
+# ASYNC_AGENT_ARGS=""
+# PROF_START_MS=""
+# if [[ "${ASYNC_PROFILER_ENABLE:-1}" == "1" ]]; then
+#   ASYNC_AGENT_ARGS="-agentpath:/async-profiler/lib/libasyncProfiler.so=start,event=${ASYNC_EVENT:-wall},timeout=${ASYNC_DURATION:-0},file=${RUN_DIR}/async.collapsed,format=collapsed"
+#   if [[ -n "${ASYNC_INTERVAL:-}" ]]; then
+#     ASYNC_AGENT_ARGS="${ASYNC_AGENT_ARGS},interval=${ASYNC_INTERVAL}"
+#   fi
+#   PROF_START_MS="$(date +%s%3N)"
+#   echo "async-profiler start_ms=${PROF_START_MS}, timeout_s=${ASYNC_DURATION:-0}"
+# fi
+
 PROFILE_PATH=/custom_profile.jfc
 java \
   -XX:+UnlockDiagnosticVMOptions \
@@ -36,6 +56,11 @@ java \
   -XX:StartFlightRecording=settings=${PROFILE_PATH},filename=${RUN_DIR}/jfr.jfr,dumponexit=true \
   -cp "/app/*:/app/lib/*" \
   ProducerOnce
+# if [[ -n "${PROF_START_MS}" ]]; then
+#   PROF_END_MS="$(date +%s%3N)"
+#   PROF_ELAPSED_MS="$((PROF_END_MS - PROF_START_MS))"
+#   echo "async-profiler end_ms=${PROF_END_MS}, elapsed_ms=${PROF_ELAPSED_MS}"
+# fi
 
 # kubectl cp를 위한 여유 시간
 POST_EXIT_SLEEP_MS="${POST_EXIT_SLEEP_MS:-3000}"
