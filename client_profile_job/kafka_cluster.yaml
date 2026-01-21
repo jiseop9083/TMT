@@ -8,13 +8,13 @@ spec:
   resources:
     requests: # 0.25 코어, 1GB 메모리
       cpu: "250m"
-      memory: "1Gi"
+      memory: "2Gi"
     limits:
       cpu: "250m" 
-      memory: "1Gi"
+      memory: "2Gi"
   jvmOptions: # JVM Heap 옵션 128MB 메모리
-    -Xms: 512m
-    -Xmx: 512m
+    -Xms: 1g
+    -Xmx: 1g
   replicas: 1
   roles:
     - controller
