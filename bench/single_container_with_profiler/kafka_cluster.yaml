@@ -77,28 +77,3 @@ spec:
       type: internal
       tls: true
 
-  # entityOperator:
-  #   topicOperator:
-  #     resources:
-  #       requests:
-  #         cpu: "100m"
-  #         memory: "512Mi"
-  #       limits:
-  #         cpu: "100m"
-  #         memory: "512Mi"
-  #     jvmOptions:
-  #       -Xms: 256m
-  #       -Xmx: 256m
-  #   userOperator:
-  #     resources:
-  #       requests:
-  #         cpu: "100m"
-  #         memory: "512Mi"
-  #       limits:
-  #         cpu: "100m"
-  #         memory: "512Mi"
-  #     jvmOptions:
-  #       -Xms: 256m
-  #       -Xmx: 256m
-
-
