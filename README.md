@@ -49,41 +49,45 @@ TOPIC=bench-topic NUM_RECORDS=1000000 THROUGHPUT=20000 ./bench/stress_test/scrip
 ```
 
 ## Analyzer Usage (CSV + Plots)
-The analyzer reads `app.log`, `metrics*.txt`, and `*.jfr` from each experiment directory and writes CSVs + plots. If `jfr` is not on PATH, it uses Docker (`eclipse-temurin:21-jdk`) to parse JFR.
+The analyzer reads `app.log`, `metrics*.txt`, and `*.jfr` from each experiment directory and writes CSVs + plots.
 
-1) Generate analysis CSVs (top 50 methods by wall-clock time by default):
+### One-shot pipeline (Docker)
+Run everything (JFR → JSONL → CSVs → plots) in Docker:
 ```bash
-python analayzer/analyze_experiments.py --out-dir bench/e2e_with_profiler/out
+analyzer/run_latency_pipeline.sh client_profile_job/out
 ```
-To include all methods, set `--top-n 0`. To override the Docker image, use `--jfr-docker-image <image>`.
-
-2) Generate plots:
+Run only JfrLatencyBreakdown in Docker:
 ```bash
-python analayzer/plot_experiments.py --out-dir bench/e2e_with_profiler/out
+analyzer/run_latency_pipeline.sh --latency-only client_profile_job/out
+```
+Outputs are written under `analysis/` in the selected run directory:
+- `analysis/latency_breakdown.csv`
+- `analysis/json/*.jsonl`
+ - `analysis/plots/e2e_latency.png`
+ - `analysis/plots/delay_breakdown.png`
+
+### Manual steps (local)
+Generate latency breakdown CSV:
+```bash
+java -cp analyzer JfrLatencyBreakdown --out-dir client_profile_job/out
+```
+Generate plots from latency_breakdown.csv:
+```bash
+java -cp analyzer JfrLatencyPlot --out-dir client_profile_job/out
+```
+Enable Z-score filtering (default threshold 3.0):
+```bash
+java -cp analyzer JfrLatencyPlot --out-dir client_profile_job/out --zscore-filter
+```
+Change Z-score threshold:
+```bash
+java -cp analyzer JfrLatencyPlot --out-dir client_profile_job/out --zscore-filter --zscore-threshold 2.5
 ```
 
-Outputs are written under `analysis/` in the selected run directory (method times include CPU samples + wall-clock wait events):
-- `analysis/summary.csv`
-- `analysis/method_times.csv`
-- `analysis/resources.csv`
-- `analysis/plots/*.png`
-
-### Analyzer via Docker
-Build the analyzer image:
+### Export JFR to JSON (optional)
+Export JSON files under `analysis/json`:
 ```bash
-docker build -t kafka-analyzer -f analayzer/Dockerfile .
-```
-
-Run analysis in the container (mount the repo):
-```bash
-docker run --rm -v "$PWD:/workspace" kafka-analyzer \
-  --out-dir /workspace/bench/e2e_with_profiler/out --mode APP --top-n 50
-```
-
-Export JFR to JSON in the container:
-```bash
-docker run --rm -v "$PWD:/workspace" kafka-analyzer \
-  java -cp /app/analayzer JfrJsonExport /workspace/run_0001.jfr /workspace/run_0001.json
+java -cp analyzer JfrJsonExport --out-dir client_profile_job/out
 ```
 
 ## Version Info
