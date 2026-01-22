@@ -43,6 +43,7 @@ public class JfrLatencyPlot {
         String plotDirArg = "";
         boolean useZscoreFilter = false;
         double zscoreThreshold = 3.0;
+        boolean aggregateOnly = false;
 
         for (int i = 0; i < args.length; i++) {
             String arg = args[i];
@@ -56,10 +57,12 @@ public class JfrLatencyPlot {
                 useZscoreFilter = true;
             } else if ("--zscore-threshold".equals(arg) && i + 1 < args.length) {
                 zscoreThreshold = Double.parseDouble(args[++i]);
+            } else if ("--aggregate-only".equals(arg)) {
+                aggregateOnly = true;
             } else if ("--help".equals(arg)) {
                 System.out.println(
                         "Usage: java JfrLatencyPlot --out-dir <dir> [--analysis-dir <dir>] [--plot-dir <dir>]\n" +
-                        "       [--zscore-filter] [--zscore-threshold <value>]");
+                        "       [--zscore-filter] [--zscore-threshold <value>] [--aggregate-only]");
                 return;
             } else {
                 throw new IllegalArgumentException("Unknown argument: " + arg);
@@ -68,35 +71,39 @@ public class JfrLatencyPlot {
 
         Path outDir = Paths.get(outDirArg);
         Path runDir = analysisDirArg.isEmpty() ? findRunDir(outDir) : null;
-        Path analysisDir = analysisDirArg.isEmpty()
-                ? runDir.resolve("analysis")
-                : Paths.get(analysisDirArg);
-        if (!Files.exists(analysisDir)) {
-            throw new IllegalStateException("analysis dir not found: " + analysisDir);
+        if (!aggregateOnly) {
+            Path analysisDir = analysisDirArg.isEmpty()
+                    ? runDir.resolve("analysis")
+                    : Paths.get(analysisDirArg);
+            if (!Files.exists(analysisDir)) {
+                throw new IllegalStateException("analysis dir not found: " + analysisDir);
+            }
+
+            Path plotDir = plotDirArg.isEmpty() ? analysisDir.resolve("plots") : Paths.get(plotDirArg);
+            Files.createDirectories(plotDir);
+
+            Path latencyCsv = analysisDir.resolve("latency_breakdown.csv");
+            if (!Files.exists(latencyCsv)) {
+                throw new IllegalStateException("latency_breakdown.csv not found: " + latencyCsv);
+            }
+
+            List<Row> rows = readLatencyRows(latencyCsv);
+            if (useZscoreFilter) {
+                int before = rows.size();
+                rows = filterByZscore(rows, zscoreThreshold);
+                int after = rows.size();
+                System.out.println("Z-score filter threshold=" + zscoreThreshold
+                        + " rows " + before + " -> " + after);
+            }
+            rows.sort(Comparator.comparingDouble(r -> r.topicCount));
+
+            plotE2eLatency(rows, plotDir.resolve("e2e_latency.png"), "E2E latency");
+            plotDelayBreakdown(rows, plotDir.resolve("delay_message_send.png"),
+                    plotDir.resolve("delay_wait_on_metadata.png"),
+                    "messageSend latency", "waitOnMetadata latency");
+
+            System.out.println("Wrote plots to " + plotDir);
         }
-
-        Path plotDir = plotDirArg.isEmpty() ? analysisDir.resolve("plots") : Paths.get(plotDirArg);
-        Files.createDirectories(plotDir);
-
-        Path latencyCsv = analysisDir.resolve("latency_breakdown.csv");
-        if (!Files.exists(latencyCsv)) {
-            throw new IllegalStateException("latency_breakdown.csv not found: " + latencyCsv);
-        }
-
-        List<Row> rows = readLatencyRows(latencyCsv);
-        if (useZscoreFilter) {
-            int before = rows.size();
-            rows = filterByZscore(rows, zscoreThreshold);
-            int after = rows.size();
-            System.out.println("Z-score filter threshold=" + zscoreThreshold
-                    + " rows " + before + " -> " + after);
-        }
-        rows.sort(Comparator.comparingDouble(r -> r.topicCount));
-
-        plotE2eLatency(rows, plotDir.resolve("e2e_latency.png"), "E2E latency");
-        plotDelayBreakdown(rows, plotDir.resolve("delay_message_send.png"),
-                plotDir.resolve("delay_wait_on_metadata.png"),
-                "messageSend latency", "waitOnMetadata latency");
 
         if (analysisDirArg.isEmpty()) {
             Path baseOutDir = runDir.getParent() != null ? runDir.getParent() : runDir;
@@ -126,7 +133,10 @@ public class JfrLatencyPlot {
             }
         }
 
-        System.out.println("Wrote plots to " + plotDir);
+        if (analysisDirArg.isEmpty()) {
+            Path baseOutDir = runDir.getParent() != null ? runDir.getParent() : runDir;
+            System.out.println("Wrote plots to " + baseOutDir.resolve("plots"));
+        }
     }
 
     // latency_breakdown.csv에서 필요한 컬럼만 읽어 Row 리스트를 만든다

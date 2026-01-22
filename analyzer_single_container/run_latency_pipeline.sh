@@ -5,6 +5,7 @@ MODE="all"
 OUT_DIR=""
 ZSCORE_FILTER=1
 ZSCORE_THRESHOLD="2.33"
+AGGREGATE_ONLY=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -27,6 +28,10 @@ while [[ $# -gt 0 ]]; do
       fi
       ZSCORE_THRESHOLD="$2"
       shift 2
+      ;;
+    --aggregate-only)
+      AGGREGATE_ONLY=1
+      shift
       ;;
     --out-dir)
       if [[ -z "${2:-}" ]]; then
@@ -73,6 +78,10 @@ if [[ -z "${RUN_IN_DOCKER:-}" ]]; then
   if [[ "$ZSCORE_FILTER" -eq 1 ]]; then
     DOCKER_ZSCORE_ARG+=(--zscore-filter)
   fi
+  DOCKER_AGG_ARG=()
+  if [[ "$AGGREGATE_ONLY" -eq 1 ]]; then
+    DOCKER_AGG_ARG+=(--aggregate-only)
+  fi
   docker run --rm \
     -e RUN_IN_DOCKER=1 \
     -e RUN_MODE="$MODE" \
@@ -83,6 +92,7 @@ if [[ -z "${RUN_IN_DOCKER:-}" ]]; then
     ${DOCKER_MODE_ARG} \
     "$OUT_DIR" \
     "${DOCKER_ZSCORE_ARG[@]}" \
+    "${DOCKER_AGG_ARG[@]}" \
     --zscore-threshold "$ZSCORE_THRESHOLD"
   exit 0
 fi
@@ -122,5 +132,8 @@ echo "Generating plots from latency_breakdown.csv..."
 PLOT_ARGS=(--out-dir "$OUT_DIR" --zscore-threshold "$ZSCORE_THRESHOLD")
 if [[ "$ZSCORE_FILTER" -eq 1 ]]; then
   PLOT_ARGS+=(--zscore-filter)
+fi
+if [[ "$AGGREGATE_ONLY" -eq 1 ]]; then
+  PLOT_ARGS+=(--aggregate-only)
 fi
 java -cp "$TMP_BUILD_DIR" JfrLatencyPlot "${PLOT_ARGS[@]}"
