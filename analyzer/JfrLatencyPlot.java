@@ -88,7 +88,8 @@ public class JfrLatencyPlot {
         rows.sort(Comparator.comparingDouble(r -> r.topicCount));
 
         plotE2eLatency(rows, plotDir.resolve("e2e_latency.png"));
-        plotDelayBreakdown(rows, plotDir.resolve("delay_breakdown.png"));
+        plotDelayBreakdown(rows, plotDir.resolve("delay_message_send.png"),
+                plotDir.resolve("delay_wait_on_metadata.png"));
 
         System.out.println("Wrote plots to " + plotDir);
     }
@@ -225,7 +226,7 @@ public class JfrLatencyPlot {
     }
 
     // 메시지 전송/메타데이터 대기 지연을 시리즈로 그린다
-    static void plotDelayBreakdown(List<Row> rows, Path outPath) throws IOException {
+    static void plotDelayBreakdown(List<Row> rows, Path messageSendPath, Path waitOnMetadataPath) throws IOException {
         List<Double> xs = new ArrayList<>();
         List<Double> produceCompletion = new ArrayList<>();
         List<Double> waitOnMetadata = new ArrayList<>();
@@ -234,15 +235,10 @@ public class JfrLatencyPlot {
             produceCompletion.add(row.produceCompletionMs);
             waitOnMetadata.add(row.waitOnMetadataMs);
         }
-        PlotSpec spec = new PlotSpec("Delay breakdown", "topic_count", "latency(ms)");
-        renderMultiSeriesPlot(
-                xs,
-                List.of(produceCompletion, waitOnMetadata),
-                List.of("messageSend", "waitOnMetadata"),
-                List.of(Color.decode("#00A36C"), Color.decode("#FF7A00")),
-                spec,
-                outPath
-        );
+        PlotSpec messageSpec = new PlotSpec("messageSend latency", "topic_count", "latency(ms)");
+        PlotSpec metadataSpec = new PlotSpec("waitOnMetadata latency", "topic_count", "latency(ms)");
+        renderScatterPlot(xs, produceCompletion, messageSpec, messageSendPath, Color.decode("#00A36C"));
+        renderScatterPlot(xs, waitOnMetadata, metadataSpec, waitOnMetadataPath, Color.decode("#FF7A00"));
     }
 
     // 플롯 메타데이터(제목/축 라벨) 묶음
@@ -280,7 +276,7 @@ public class JfrLatencyPlot {
 
         double minX = min(xs);
         double maxX = max(xs);
-        double minY = 0.0;
+        double minY = minSeries(series);
         double maxY = maxSeries(series);
         if (maxX <= minX) {
             maxX = minX + 1.0;
@@ -407,6 +403,14 @@ public class JfrLatencyPlot {
             max = Math.max(max, max(values));
         }
         return max == Double.NEGATIVE_INFINITY ? 1.0 : max;
+    }
+
+    static double minSeries(List<List<Double>> series) {
+        double min = Double.POSITIVE_INFINITY;
+        for (List<Double> values : series) {
+            min = Math.min(min, min(values));
+        }
+        return min == Double.POSITIVE_INFINITY ? 0.0 : min;
     }
 
     // 실행 결과 디렉터리(YYYY... 형식)를 찾아 반환한다

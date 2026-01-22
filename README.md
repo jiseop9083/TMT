@@ -60,11 +60,16 @@ Run only JfrLatencyBreakdown in Docker:
 ```bash
 analyzer/run_latency_pipeline.sh --latency-only client_profile_job/out
 ```
+Run only plots in Docker (requires existing latency_breakdown.csv):
+```bash
+analyzer/run_latency_pipeline.sh --plot-only client_profile_job/out
+```
 Outputs are written under `analysis/` in the selected run directory:
 - `analysis/latency_breakdown.csv`
 - `analysis/json/*.jsonl`
  - `analysis/plots/e2e_latency.png`
- - `analysis/plots/delay_breakdown.png`
+ - `analysis/plots/delay_message_send.png`
+ - `analysis/plots/delay_wait_on_metadata.png`
 
 ### Manual steps (local)
 Generate latency breakdown CSV:
