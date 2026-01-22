@@ -43,9 +43,14 @@ KAFKA_CLIENTS_VERSION="${KAFKA_CLIENTS_VERSION:-4.1.1}"
 SLF4J_VERSION="${SLF4J_VERSION:-2.0.16}"
 POD_TEMPLATE="${POD_TEMPLATE:-${SCRIPT_DIR}/kafka_producer_experiment_pod.yaml}"
 
+if [[ "${AUTO_CREATE_TOPICS}" == "true" ]]; then
+  MODE_DIR="enabled"
+else
+  MODE_DIR="disabled"
+fi
 
 TS="$(date +%Y%m%d_%H%M%S)"
-OUTDIR="${OUTDIR:-${SCRIPT_DIR}/out/run_${TS}}"
+OUTDIR="${OUTDIR:-${SCRIPT_DIR}/out/${MODE_DIR}/run_${TS}}"
 mkdir -p "${OUTDIR}"
 
 
