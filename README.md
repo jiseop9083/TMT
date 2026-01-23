@@ -71,6 +71,26 @@ Outputs are written under `analysis/` in the selected run directory:
  - `analysis/plots/delay_message_send.png`
  - `analysis/plots/delay_wait_on_metadata.png`
 
+## Analyzer (Single Container Runs)
+For single-container runs under `bench/single_container_with_profiler/out`, use the dedicated pipeline.
+
+Run end-to-end (CSV + plots):
+```bash
+analyzer_single_container/run_latency_pipeline.sh bench/single_container_with_profiler/out/run-1
+```
+Generate only plots:
+```bash
+analyzer_single_container/run_latency_pipeline.sh --plot-only bench/single_container_with_profiler/out/run-1
+```
+Aggregate plots across all runs under `out/`:
+```bash
+analyzer_single_container/run_latency_pipeline.sh bench/single_container_with_profiler/out/ --aggregate-only --zscore-filter --zscore-threshold 1
+```
+Outputs:
+- `analysis/latency_breakdown.csv` (per run, per topic)
+- `analysis/summary.csv` (per run, global totals)
+- `out/plots/*_all_runs.png` (aggregate plots)
+
 ### Manual steps (local)
 Generate latency breakdown CSV:
 ```bash

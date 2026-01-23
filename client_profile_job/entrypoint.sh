@@ -63,7 +63,7 @@ java \
 # fi
 
 # kubectl cp를 위한 여유 시간
-POST_EXIT_SLEEP_MS="${POST_EXIT_SLEEP_MS:-3000}"
-sleep "$(awk "BEGIN {printf \"%.3f\", ${POST_EXIT_SLEEP_MS}/1000}")"
+# POST_EXIT_SLEEP_MS="${POST_EXIT_SLEEP_MS:-3000}"
+# sleep "$(awk "BEGIN {printf \"%.3f\", ${POST_EXIT_SLEEP_MS}/1000}")"
 
 exit 0

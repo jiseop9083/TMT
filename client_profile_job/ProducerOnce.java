@@ -47,7 +47,7 @@ public class ProducerOnce {
         // 전역 인덱스 (1-based): offset은 0-based, localIdx도 0-based
         int globalIdx = offset + localIdx + 1;
         
-        String topic = "test_topic_" + globalIdx;
+        String topic = "";
 
         String largeValue = "x".repeat(10000000) + "\n"; // 10MB 메시지
 
@@ -95,15 +95,15 @@ public class ProducerOnce {
             }
         }
 
-        
-        KafkaProducer<String, String> producer = new KafkaProducer<>(props);
         long initEndNs = System.nanoTime();
 
         System.out.println("producer_init_ms=" + ((initEndNs - initStartNs) / 1_000_000));
 
         long sendTotalNs = 0;
         StringBuilder perMsg = new StringBuilder();
-        for (int i = 0; i < numMessages; i++) {
+        for (int i = 0; i < 1000; i++) {
+            topic = "test_topic_" + i;
+            KafkaProducer<String, String> producer = new KafkaProducer<>(props);
             long sendStartNs = System.nanoTime();
             try {
                 producer.send(new ProducerRecord<>(topic, "key", largeValue))
@@ -117,9 +117,13 @@ public class ProducerOnce {
             sendTotalNs += (sendEndNs - sendStartNs);
             perMsg.append("send_ack_ms_").append(i + 1).append("=")
                 .append(sendMs).append("\n");
+            
+            producer.flush();
+            producer.close();
+
+            System.out.println(i);
         }
-        producer.flush();
-        producer.close();
+        
 
         String metrics = ""
             + "timestamp=" + Instant.now() + "\n"

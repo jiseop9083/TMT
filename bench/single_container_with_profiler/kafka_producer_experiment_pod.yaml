@@ -1,0 +1,44 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: kafka-producer-experiment
+spec:
+  restartPolicy: Never
+  containers:
+    - name: producer
+      securityContext:
+        privileged: true
+        capabilities:
+          add: ["NET_ADMIN"]
+
+      image: my-kafka-producer:latest
+      imagePullPolicy: IfNotPresent
+
+      resources:
+        requests:
+          cpu: "1"
+          memory: "1Gi"
+        limits:
+          cpu: "1"
+          memory: "1Gi"
+
+      env:
+        - name: AUTO_CREATE_TOPICS
+          value: "REPLACE_AUTO_CREATE_TOPICS"
+
+        - name: JAVA_TOOL_OPTIONS
+          value: "-Xms512m -Xmx512m"
+
+      envFrom:
+        - configMapRef:
+            name: producer-config
+
+      volumeMounts:
+        - name: profiles
+          mountPath: /profiles
+
+  volumes:
+    - name: profiles
+      hostPath:
+        path: /tmp/kafka-profiles
+        type: DirectoryOrCreate
