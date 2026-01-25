@@ -74,18 +74,50 @@ Outputs are written under `analysis/` in the selected run directory:
 ## Analyzer (Single Container Runs)
 For single-container runs under `bench/single_container_with_profiler/out`, use the dedicated pipeline.
 
-Run end-to-end (CSV + plots):
+### Basic usage
+Run end-to-end (CSV + plots) for a single run:
 ```bash
 analyzer_single_container/run_latency_pipeline.sh bench/single_container_with_profiler/out/run-1
 ```
-Generate only plots:
+Run end-to-end for all runs under a parent directory (scans `run_*`):
+```bash
+analyzer_single_container/run_latency_pipeline.sh bench/single_container_with_profiler/out/enabled --all-runs
+```
+Generate only plots (requires existing `analysis/latency_breakdown.csv`):
 ```bash
 analyzer_single_container/run_latency_pipeline.sh --plot-only bench/single_container_with_profiler/out/run-1
 ```
-Aggregate plots across all runs under `out/`:
+Generate only CSVs:
 ```bash
-analyzer_single_container/run_latency_pipeline.sh bench/single_container_with_profiler/out/ --aggregate-only --zscore-filter --zscore-threshold 1
+analyzer_single_container/run_latency_pipeline.sh --latency-only bench/single_container_with_profiler/out/enabled --all-runs
 ```
+
+### Options
+- `--all-runs`:
+  Scan the provided directory for `run_*` subdirectories and process each run.
+- `--aggregate-only`:
+  Only generate aggregate plots across all runs (no per-run plots).
+- `--plot-only`:
+  Skip CSV generation and only render plots.
+- `--latency-only`:
+  Only generate CSVs and skip plots.
+- `--zscore-filter`:
+  Filter outliers using Z-score.
+- `--zscore-threshold <value>`:
+  Set Z-score cutoff (default 3.0 in plotter).
+- `--regression`:
+  Overlay a red dashed linear regression line with slope label (uses post-filtered data).
+
+### Examples
+Aggregate plots across all runs:
+```bash
+analyzer_single_container/run_latency_pipeline.sh bench/single_container_with_profiler/out/enabled --all-runs --aggregate-only --zscore-filter --zscore-threshold 1
+```
+All runs + per-run plots + regression line:
+```bash
+analyzer_single_container/run_latency_pipeline.sh bench/single_container_with_profiler/out/enabled --all-runs --zscore-filter --zscore-threshold 1 --regression
+```
+
 Outputs:
 - `analysis/latency_breakdown.csv` (per run, per topic)
 - `analysis/summary.csv` (per run, global totals)

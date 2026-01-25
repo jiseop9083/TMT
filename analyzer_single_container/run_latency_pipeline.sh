@@ -6,6 +6,9 @@ OUT_DIR=""
 ZSCORE_FILTER=1
 ZSCORE_THRESHOLD="2.33"
 AGGREGATE_ONLY=0
+ALL_RUNS=0
+REGRESSION=0
+ARG_COUNT=$#
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -33,6 +36,14 @@ while [[ $# -gt 0 ]]; do
       AGGREGATE_ONLY=1
       shift
       ;;
+    --regression)
+      REGRESSION=1
+      shift
+      ;;
+    --all-runs)
+      ALL_RUNS=1
+      shift
+      ;;
     --out-dir)
       if [[ -z "${2:-}" ]]; then
         echo "--out-dir requires a value" >&2
@@ -54,6 +65,9 @@ while [[ $# -gt 0 ]]; do
 done
 
 OUT_DIR="${OUT_DIR:-client_profile_job/out}"
+if [[ "$ARG_COUNT" -eq 0 ]]; then
+  ALL_RUNS=1
+fi
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
@@ -82,6 +96,33 @@ if [[ -z "${RUN_IN_DOCKER:-}" ]]; then
   if [[ "$AGGREGATE_ONLY" -eq 1 ]]; then
     DOCKER_AGG_ARG+=(--aggregate-only)
   fi
+  DOCKER_ALL_RUNS_ARG=()
+  if [[ "$ALL_RUNS" -eq 1 ]]; then
+    DOCKER_ALL_RUNS_ARG+=(--all-runs)
+  fi
+  DOCKER_REGRESSION_ARG=()
+  if [[ "$REGRESSION" -eq 1 ]]; then
+    DOCKER_REGRESSION_ARG+=(--regression)
+  fi
+  DOCKER_ARGS=()
+  if [[ -n "$DOCKER_MODE_ARG" ]]; then
+    DOCKER_ARGS+=("$DOCKER_MODE_ARG")
+  fi
+  DOCKER_ARGS+=("$OUT_DIR")
+  if ((${#DOCKER_ZSCORE_ARG[@]})); then
+    DOCKER_ARGS+=("${DOCKER_ZSCORE_ARG[@]}")
+  fi
+  if ((${#DOCKER_AGG_ARG[@]})); then
+    DOCKER_ARGS+=("${DOCKER_AGG_ARG[@]}")
+  fi
+  if ((${#DOCKER_ALL_RUNS_ARG[@]})); then
+    DOCKER_ARGS+=("${DOCKER_ALL_RUNS_ARG[@]}")
+  fi
+  if ((${#DOCKER_REGRESSION_ARG[@]})); then
+    DOCKER_ARGS+=("${DOCKER_REGRESSION_ARG[@]}")
+  fi
+  DOCKER_ARGS+=(--zscore-threshold "$ZSCORE_THRESHOLD")
+
   docker run --rm \
     -e RUN_IN_DOCKER=1 \
     -e RUN_MODE="$MODE" \
@@ -89,11 +130,7 @@ if [[ -z "${RUN_IN_DOCKER:-}" ]]; then
     -w /workspace \
     "$IMAGE_NAME" \
     /workspace/analyzer_single_container/run_latency_pipeline.sh \
-    ${DOCKER_MODE_ARG} \
-    "$OUT_DIR" \
-    "${DOCKER_ZSCORE_ARG[@]}" \
-    "${DOCKER_AGG_ARG[@]}" \
-    --zscore-threshold "$ZSCORE_THRESHOLD"
+    "${DOCKER_ARGS[@]}"
   exit 0
 fi
 
@@ -117,15 +154,44 @@ javac -d "$TMP_BUILD_DIR" \
   "$ROOT_DIR/analyzer_single_container/JfrLatencyBreakdown.java" \
   "$ROOT_DIR/analyzer_single_container/JfrLatencyPlot.java"
 
+run_dirs=()
+
 if [[ "$RUN_MODE" == "plot" ]]; then
   echo "Skipping latency_breakdown.csv generation (plot-only mode)."
-elif [[ "$RUN_MODE" == "latency" ]]; then
-  echo "Generating latency_breakdown.csv (JSON parse + CSV export)..."
-  java -cp "$TMP_BUILD_DIR" JfrLatencyBreakdown --out-dir "$OUT_DIR"
-  exit 0
 else
-  echo "Generating latency_breakdown.csv (JSON parse + CSV export)..."
-  java -cp "$TMP_BUILD_DIR" JfrLatencyBreakdown --out-dir "$OUT_DIR"
+  if [[ "$ALL_RUNS" -eq 1 ]]; then
+    run_dirs=()
+    base_dir="$OUT_DIR"
+    if [[ -d "$base_dir" ]]; then
+      base_name="$(basename "$base_dir")"
+      if [[ "$base_name" == run_* ]]; then
+        base_dir="$(dirname "$base_dir")"
+      fi
+    fi
+    if [[ -d "$base_dir" ]]; then
+      for d in "$base_dir"/run_*; do
+        if [[ -d "$d" ]]; then
+          run_dirs+=("$d")
+        fi
+      done
+    fi
+    if ((${#run_dirs[@]})); then
+      for run_dir in "${run_dirs[@]}"; do
+        echo "Generating latency_breakdown.csv for ${run_dir}..."
+        java -cp "$TMP_BUILD_DIR" JfrLatencyBreakdown --out-dir "$run_dir"
+      done
+    else
+      echo "Generating latency_breakdown.csv (JSON parse + CSV export)..."
+      java -cp "$TMP_BUILD_DIR" JfrLatencyBreakdown --out-dir "$OUT_DIR"
+    fi
+  else
+    echo "Generating latency_breakdown.csv (JSON parse + CSV export)..."
+    java -cp "$TMP_BUILD_DIR" JfrLatencyBreakdown --out-dir "$OUT_DIR"
+  fi
+
+  if [[ "$RUN_MODE" == "latency" ]]; then
+    exit 0
+  fi
 fi
 
 echo "Generating plots from latency_breakdown.csv..."
@@ -135,5 +201,23 @@ if [[ "$ZSCORE_FILTER" -eq 1 ]]; then
 fi
 if [[ "$AGGREGATE_ONLY" -eq 1 ]]; then
   PLOT_ARGS+=(--aggregate-only)
+fi
+if [[ "$REGRESSION" -eq 1 ]]; then
+  PLOT_ARGS+=(--regression)
+fi
+if [[ "$ALL_RUNS" -eq 1 && "${#run_dirs[@]}" -gt 0 && "$AGGREGATE_ONLY" -eq 0 ]]; then
+  for run_dir in "${run_dirs[@]}"; do
+    analysis_dir="$run_dir/analysis"
+    if [[ -d "$analysis_dir" ]]; then
+      per_run_args=(--analysis-dir "$analysis_dir" --zscore-threshold "$ZSCORE_THRESHOLD")
+      if [[ "$ZSCORE_FILTER" -eq 1 ]]; then
+        per_run_args+=(--zscore-filter)
+      fi
+      if [[ "$REGRESSION" -eq 1 ]]; then
+        per_run_args+=(--regression)
+      fi
+      java -cp "$TMP_BUILD_DIR" JfrLatencyPlot "${per_run_args[@]}"
+    fi
+  done
 fi
 java -cp "$TMP_BUILD_DIR" JfrLatencyPlot "${PLOT_ARGS[@]}"

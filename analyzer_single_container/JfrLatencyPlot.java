@@ -44,6 +44,7 @@ public class JfrLatencyPlot {
         boolean useZscoreFilter = false;
         double zscoreThreshold = 3.0;
         boolean aggregateOnly = false;
+        boolean drawRegression = false;
 
         for (int i = 0; i < args.length; i++) {
             String arg = args[i];
@@ -59,10 +60,12 @@ public class JfrLatencyPlot {
                 zscoreThreshold = Double.parseDouble(args[++i]);
             } else if ("--aggregate-only".equals(arg)) {
                 aggregateOnly = true;
+            } else if ("--regression".equals(arg)) {
+                drawRegression = true;
             } else if ("--help".equals(arg)) {
                 System.out.println(
                         "Usage: java JfrLatencyPlot --out-dir <dir> [--analysis-dir <dir>] [--plot-dir <dir>]\n" +
-                        "       [--zscore-filter] [--zscore-threshold <value>] [--aggregate-only]");
+                        "       [--zscore-filter] [--zscore-threshold <value>] [--aggregate-only] [--regression]");
                 return;
             } else {
                 throw new IllegalArgumentException("Unknown argument: " + arg);
@@ -97,10 +100,10 @@ public class JfrLatencyPlot {
             }
             rows.sort(Comparator.comparingDouble(r -> r.topicCount));
 
-            plotE2eLatency(rows, plotDir.resolve("e2e_latency.png"), "E2E latency");
+            plotE2eLatency(rows, plotDir.resolve("e2e_latency.png"), "E2E latency", drawRegression);
             plotDelayBreakdown(rows, plotDir.resolve("delay_message_send.png"),
                     plotDir.resolve("delay_wait_on_metadata.png"),
-                    "messageSend latency", "waitOnMetadata latency");
+                    "messageSend latency", "waitOnMetadata latency", drawRegression);
 
             System.out.println("Wrote plots to " + plotDir);
         }
@@ -123,12 +126,13 @@ public class JfrLatencyPlot {
                     Files.createDirectories(combinedPlotDir);
                     plotE2eLatency(allRows,
                             combinedPlotDir.resolve("e2e_latency_all_runs.png"),
-                            "E2E latency (all runs)");
+                            "E2E latency (all runs)", drawRegression);
                     plotDelayBreakdown(allRows,
                             combinedPlotDir.resolve("delay_message_send_all_runs.png"),
                             combinedPlotDir.resolve("delay_wait_on_metadata_all_runs.png"),
                             "messageSend latency (all runs)",
-                            "waitOnMetadata latency (all runs)");
+                            "waitOnMetadata latency (all runs)",
+                            drawRegression);
                 }
             }
         }
@@ -259,7 +263,8 @@ public class JfrLatencyPlot {
     }
 
     // E2E 지연 산포도를 저장한다
-    static void plotE2eLatency(List<Row> rows, Path outPath, String title) throws IOException {
+    static void plotE2eLatency(List<Row> rows, Path outPath, String title, boolean drawRegression)
+            throws IOException {
         List<Double> xs = new ArrayList<>();
         List<Double> ys = new ArrayList<>();
         for (Row row : rows) {
@@ -267,12 +272,13 @@ public class JfrLatencyPlot {
             ys.add(row.producerE2eMs);
         }
         PlotSpec spec = new PlotSpec(title, "# of topic", "latency(ms)");
-        renderScatterPlot(xs, ys, spec, outPath, Color.decode("#2F6BFF"));
+        renderScatterPlot(xs, ys, spec, outPath, Color.decode("#2F6BFF"), drawRegression);
     }
 
     // 메시지 전송/메타데이터 대기 지연을 시리즈로 그린다
     static void plotDelayBreakdown(List<Row> rows, Path messageSendPath, Path waitOnMetadataPath,
-                                   String messageTitle, String metadataTitle) throws IOException {
+                                   String messageTitle, String metadataTitle, boolean drawRegression)
+            throws IOException {
         List<Double> xs = new ArrayList<>();
         List<Double> produceCompletion = new ArrayList<>();
         List<Double> waitOnMetadata = new ArrayList<>();
@@ -283,8 +289,10 @@ public class JfrLatencyPlot {
         }
         PlotSpec messageSpec = new PlotSpec(messageTitle, "# of topic", "latency(ms)");
         PlotSpec metadataSpec = new PlotSpec(metadataTitle, "# of topic", "latency(ms)");
-        renderScatterPlot(xs, produceCompletion, messageSpec, messageSendPath, Color.decode("#00A36C"));
-        renderScatterPlot(xs, waitOnMetadata, metadataSpec, waitOnMetadataPath, Color.decode("#FF7A00"));
+        renderScatterPlot(xs, produceCompletion, messageSpec, messageSendPath,
+                Color.decode("#00A36C"), drawRegression);
+        renderScatterPlot(xs, waitOnMetadata, metadataSpec, waitOnMetadataPath,
+                Color.decode("#FF7A00"), drawRegression);
     }
 
     // 플롯 메타데이터(제목/축 라벨) 묶음
@@ -302,15 +310,16 @@ public class JfrLatencyPlot {
 
     // 단일 시리즈 산포도를 다중 시리즈 렌더러로 위임한다
     static void renderScatterPlot(List<Double> xs, List<Double> ys, PlotSpec spec,
-                                  Path outPath, Color color) throws IOException {
+                                  Path outPath, Color color, boolean drawRegression) throws IOException {
         renderMultiSeriesPlot(xs, List.of(ys), List.of("E2E latency"),
-                List.of(color), spec, outPath);
+                List.of(color), spec, outPath, drawRegression);
     }
 
     // 캔버스를 생성하고 축/격자/시리즈를 렌더링한다
     static void renderMultiSeriesPlot(List<Double> xs, List<List<Double>> series,
                                       List<String> labels, List<Color> colors,
-                                      PlotSpec spec, Path outPath) throws IOException {
+                                      PlotSpec spec, Path outPath, boolean drawRegression)
+            throws IOException {
         int width = 900;
         int height = 520;
         int left = 70;
@@ -369,6 +378,35 @@ public class JfrLatencyPlot {
                 int y = top + plotHeight - (int) ((yVal - minY) / (maxY - minY) * plotHeight);
                 g.fillOval(x - 3, y - 3, 6, 6);
             }
+        }
+
+        if (drawRegression) {
+            g.setStroke(new BasicStroke(2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND,
+                    1f, new float[] {6f, 6f}, 0f));
+            for (int s = 0; s < series.size(); s++) {
+                List<Double> ys = series.get(s);
+                Regression line = regression(xs, ys);
+                if (line == null) {
+                    continue;
+                }
+                g.setColor(Color.decode("#DC2626"));
+                double y1 = clamp(line.intercept + line.slope * minX, minY, maxY);
+                double y2 = clamp(line.intercept + line.slope * maxX, minY, maxY);
+                int x1 = left;
+                int x2 = left + plotWidth;
+                int y1p = top + plotHeight - (int) ((y1 - minY) / (maxY - minY) * plotHeight);
+                int y2p = top + plotHeight - (int) ((y2 - minY) / (maxY - minY) * plotHeight);
+                g.drawLine(x1, y1p, x2, y2p);
+
+                double midX = (minX + maxX) / 2.0;
+                double midY = clamp(line.intercept + line.slope * midX, minY, maxY);
+                int midXp = left + (int) ((midX - minX) / (maxX - minX) * plotWidth);
+                int midYp = top + plotHeight - (int) ((midY - minY) / (maxY - minY) * plotHeight);
+                String slopeLabel = String.format(Locale.ROOT, "slope=%.4f", line.slope);
+                g.setFont(new Font("SansSerif", Font.BOLD, 12));
+                g.drawString(slopeLabel, midXp + 6, midYp - 8);
+            }
+            g.setStroke(new BasicStroke(1f));
         }
 
         int legendX = left + plotWidth - 160;
@@ -457,6 +495,46 @@ public class JfrLatencyPlot {
             min = Math.min(min, min(values));
         }
         return min == Double.POSITIVE_INFINITY ? 0.0 : min;
+    }
+
+    static class Regression {
+        final double slope;
+        final double intercept;
+
+        Regression(double slope, double intercept) {
+            this.slope = slope;
+            this.intercept = intercept;
+        }
+    }
+
+    static Regression regression(List<Double> xs, List<Double> ys) {
+        int n = Math.min(xs.size(), ys.size());
+        if (n < 2) {
+            return null;
+        }
+        double sumX = 0.0;
+        double sumY = 0.0;
+        double sumXX = 0.0;
+        double sumXY = 0.0;
+        for (int i = 0; i < n; i++) {
+            double x = xs.get(i);
+            double y = ys.get(i);
+            sumX += x;
+            sumY += y;
+            sumXX += x * x;
+            sumXY += x * y;
+        }
+        double denom = n * sumXX - sumX * sumX;
+        if (Math.abs(denom) < 1e-12) {
+            return null;
+        }
+        double slope = (n * sumXY - sumX * sumY) / denom;
+        double intercept = (sumY - slope * sumX) / n;
+        return new Regression(slope, intercept);
+    }
+
+    static double clamp(double value, double min, double max) {
+        return Math.max(min, Math.min(max, value));
     }
 
     // 실행 결과 디렉터리(YYYY... 형식)를 찾아 반환한다
