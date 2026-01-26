@@ -64,6 +64,14 @@ Run only plots in Docker (requires existing latency_breakdown.csv):
 ```bash
 analyzer/run_latency_pipeline.sh --plot-only client_profile_job/out
 ```
+Add linear regression lines to plots:
+```bash
+analyzer/run_latency_pipeline.sh client_profile_job/out --regression
+```
+Customize Z-score filtering:
+```bash
+analyzer/run_latency_pipeline.sh client_profile_job/out --zscore-filter --zscore-threshold 2.0
+```
 Outputs are written under `analysis/` in the selected run directory:
 - `analysis/latency_breakdown.csv`
 - `analysis/json/*.jsonl`

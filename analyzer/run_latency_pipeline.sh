@@ -2,15 +2,50 @@
 set -euo pipefail
 
 MODE="all"
-if [[ "${1:-}" == "--latency-only" ]]; then
-  MODE="latency"
-  shift
-elif [[ "${1:-}" == "--plot-only" ]]; then
-  MODE="plot"
-  shift
-fi
+OUT_DIR=""
+REGRESSION=0
+ZSCORE_FILTER=1
+ZSCORE_THRESHOLD="2.33"
 
-OUT_DIR="${1:-client_profile_job/out}"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --latency-only)
+      MODE="latency"
+      shift
+      ;;
+    --plot-only)
+      MODE="plot"
+      shift
+      ;;
+    --regression)
+      REGRESSION=1
+      shift
+      ;;
+    --zscore-filter)
+      ZSCORE_FILTER=1
+      shift
+      ;;
+    --zscore-threshold)
+      if [[ -z "${2:-}" ]]; then
+        echo "--zscore-threshold requires a value" >&2
+        exit 1
+      fi
+      ZSCORE_THRESHOLD="$2"
+      shift 2
+      ;;
+    *)
+      if [[ -z "$OUT_DIR" ]]; then
+        OUT_DIR="$1"
+        shift
+      else
+        echo "Unknown argument: $1" >&2
+        exit 1
+      fi
+      ;;
+  esac
+done
+
+OUT_DIR="${OUT_DIR:-client_profile_job/out}"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
@@ -25,13 +60,21 @@ if [[ -z "${RUN_IN_DOCKER:-}" ]]; then
   if command -v cygpath >/dev/null 2>&1; then
     ROOT_DIR_DOCKER="$(cygpath -m "$ROOT_DIR")"
   fi
+  DOCKER_ARGS=("$OUT_DIR")
+  if [[ "$REGRESSION" -eq 1 ]]; then
+    DOCKER_ARGS+=(--regression)
+  fi
+  if [[ "$ZSCORE_FILTER" -eq 1 ]]; then
+    DOCKER_ARGS+=(--zscore-filter)
+  fi
+  DOCKER_ARGS+=(--zscore-threshold "$ZSCORE_THRESHOLD")
   docker run --rm \
     -e RUN_IN_DOCKER=1 \
     -e RUN_MODE="$MODE" \
     --mount type=bind,source="$ROOT_DIR_DOCKER",target=/workspace \
     -w /workspace \
     "$IMAGE_NAME" \
-    /workspace/analyzer/run_latency_pipeline.sh "$OUT_DIR"
+    /workspace/analyzer/run_latency_pipeline.sh "${DOCKER_ARGS[@]}"
   exit 0
 fi
 
@@ -66,6 +109,12 @@ else
   java -cp "$TMP_BUILD_DIR" JfrLatencyBreakdown --out-dir "$OUT_DIR"
 fi
 
-ZSCORE_THRESHOLD=2.33 # 99%
 echo "Generating plots from latency_breakdown.csv..."
-java -cp "$TMP_BUILD_DIR" JfrLatencyPlot --out-dir "$OUT_DIR" --zscore-filter --zscore-threshold "$ZSCORE_THRESHOLD"
+PLOT_ARGS=(--out-dir "$OUT_DIR" --zscore-threshold "$ZSCORE_THRESHOLD")
+if [[ "$ZSCORE_FILTER" -eq 1 ]]; then
+  PLOT_ARGS+=(--zscore-filter)
+fi
+if [[ "$REGRESSION" -eq 1 ]]; then
+  PLOT_ARGS+=(--regression)
+fi
+java -cp "$TMP_BUILD_DIR" JfrLatencyPlot "${PLOT_ARGS[@]}"

@@ -9,6 +9,7 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.util.Properties;
 import java.util.concurrent.TimeUnit;
+import org.apache.kafka.common.errors.TopicExistsException;
 
 public class ProduceMessages {
     public static void main(String[] args) throws Exception {
@@ -55,6 +56,15 @@ public class ProduceMessages {
         boolean autoCreateTopics = Boolean.parseBoolean(
             System.getenv().getOrDefault("AUTO_CREATE_TOPICS", "true")
         );
+        boolean warmupOnly = Boolean.parseBoolean(
+            System.getenv().getOrDefault("WARMUP_ONLY", "false")
+        );
+        boolean writeMetrics = Boolean.parseBoolean(
+            System.getenv().getOrDefault("WRITE_METRICS", "true")
+        );
+        int warmupSends = Integer.parseInt(
+            System.getenv().getOrDefault("FIRST_TOPIC_WARMUP_SENDS", "0")
+        );
 
         Properties adminProps = new Properties();
         adminProps.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, "my-cluster-kafka-bootstrap:9092");
@@ -63,6 +73,46 @@ public class ProduceMessages {
         if (!autoCreateTopics) {
             System.out.println("AUTO_CREATE_TOPICS=false → creating topics explicitly via AdminClient");
             admin = AdminClient.create(adminProps);
+        }
+
+        if (warmupOnly) {
+            if (warmupSends > 0) {
+                String warmupTopic = "test_topic_1";
+                System.out.println("warmup_start topic=" + warmupTopic + " sends=" + warmupSends);
+                if (!autoCreateTopics) {
+                    try {
+                        NewTopic newTopic = new NewTopic(warmupTopic, 1, (short) 1);
+                        admin.createTopics(Collections.singleton(newTopic))
+                             .all()
+                             .get(10, TimeUnit.SECONDS);
+                    } catch (Exception e) {
+                        if (isTopicExists(e)) {
+                            System.out.println("warmup_topic_exists topic=" + warmupTopic);
+                        } else {
+                            System.out.println("warmup_topic_create_error topic=" + warmupTopic + " error=" + e);
+                            throw e;
+                        }
+                    }
+                }
+
+                KafkaProducer<String, String> producer = new KafkaProducer<>(props);
+                try {
+                    for (int i = 1; i <= warmupSends; i++) {
+                        producer.send(new ProducerRecord<>(warmupTopic, "key", largeValue))
+                                .get(sendAckTimeoutMs, TimeUnit.MILLISECONDS);
+                    }
+                } finally {
+                    producer.flush();
+                    producer.close();
+                }
+                System.out.println("warmup_done topic=" + warmupTopic + " sends=" + warmupSends);
+            } else {
+                System.out.println("warmup_skipped sends=0");
+            }
+            if (admin != null) {
+                admin.close();
+            }
+            return;
         }
 
         long sendTotalNs = 0;
@@ -82,9 +132,12 @@ public class ProduceMessages {
                              .all()
                              .get(10, TimeUnit.SECONDS);
                     } catch (Exception e) {
-                        // 이미 있으면 무시하고 진행하고 싶으면 여기서 예외 메시지 보고 continue 처리 가능
-                        System.out.println("topic_create_error topic=" + topic + " error=" + e);
-                        throw e;
+                        if (isTopicExists(e)) {
+                            System.out.println("topic_exists topic=" + topic);
+                        } else {
+                            System.out.println("topic_create_error topic=" + topic + " error=" + e);
+                            throw e;
+                        }
                     }
                     long topicCreateEndNs = System.nanoTime();
                     topicCreateMs = (topicCreateEndNs - topicCreateStartNs) / 1_000_000;
@@ -122,7 +175,20 @@ public class ProduceMessages {
             + "send_ack_total_ms=" + (sendTotalNs / 1_000_000) + "\n"
             + perMsg;
 
-        Files.createDirectories(metricsPath.getParent());
-        Files.write(metricsPath, metrics.getBytes(StandardCharsets.UTF_8));
+        if (writeMetrics) {
+            Files.createDirectories(metricsPath.getParent());
+            Files.write(metricsPath, metrics.getBytes(StandardCharsets.UTF_8));
+        }
+    }
+
+    private static boolean isTopicExists(Throwable e) {
+        Throwable cause = e;
+        while (cause != null) {
+            if (cause instanceof TopicExistsException) {
+                return true;
+            }
+            cause = cause.getCause();
+        }
+        return false;
     }
 }
