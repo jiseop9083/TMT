@@ -202,7 +202,8 @@ public class JfrLatencyBreakdown {
                     waitEvents.add(event);
                 }
             } else if ("jdk.ThreadPark".equals(event.type)) {
-                if (stackContainsClass(event.stack, FUTURE_RECORD_METADATA_CLASS)) {
+                if (stackContainsClass(event.stack, FUTURE_RECORD_METADATA_CLASS)
+                        && isMainThread(event.threadName)) {
                     parkEvents.add(event);
                 }
             }
@@ -361,7 +362,8 @@ public class JfrLatencyBreakdown {
                         totals.waitOnMetadataNanos += nanos;
                     }
                 } else if ("jdk.ThreadPark".equals(type)) {
-                    if (stackContainsClass(parsed.stack, FUTURE_RECORD_METADATA_CLASS)) {
+                    if (stackContainsClass(parsed.stack, FUTURE_RECORD_METADATA_CLASS)
+                            && isMainThread(parsed.threadName)) {
                         totals.produceCompletionNanos += nanos;
                     }
                 } else if ("jdk.SocketRead".equals(type)) {
