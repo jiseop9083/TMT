@@ -29,9 +29,20 @@ echo "=== 제한 완료 ==="
 exec > >(tee -a "${RUN_DIR}/app.log") 2>&1
 
 PROFILE_PATH=/custom_profile.jfc
+
+FIRST_TOPIC_WARMUP_SENDS="${FIRST_TOPIC_WARMUP_SENDS:-1000}"
+if [ "${FIRST_TOPIC_WARMUP_SENDS}" -gt 0 ]; then
+  echo "=== Warmup: sending ${FIRST_TOPIC_WARMUP_SENDS} messages to test_topic_1 (no JFR) ==="
+  FIRST_TOPIC_WARMUP_SENDS="${FIRST_TOPIC_WARMUP_SENDS}" WARMUP_ONLY=true WRITE_METRICS=false java \
+    -cp "/app/*:/app/lib/*" \
+    ProduceMessages
+  echo "=== End: sending ${FIRST_TOPIC_WARMUP_SENDS} messages to test_topic_1 (no JFR) ==="
+fi
+
 java \
   -XX:+UnlockDiagnosticVMOptions \
   -XX:+DebugNonSafepoints \
+  -Xint \
   -XX:FlightRecorderOptions=stackdepth=256 \
   -XX:StartFlightRecording=settings=${PROFILE_PATH},filename=${RUN_DIR}/jfr.jfr,dumponexit=true \
   -cp "/app/*:/app/lib/*" \
