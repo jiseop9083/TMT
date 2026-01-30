@@ -5,7 +5,17 @@ metadata:
   labels:
     strimzi.io/cluster: my-cluster
 spec:
-  replicas: 3
+  resources:
+    requests: # 0.25 코어, 2GB 메모리
+      cpu: "250m"
+      memory: "2Gi"
+    limits:
+      cpu: "250m" 
+      memory: "2Gi"
+  jvmOptions: # JVM Heap 옵션 1GB 메모리
+    -Xms: 1g
+    -Xmx: 1g
+  replicas: 1
   roles:
     - controller
   storage:
@@ -22,7 +32,17 @@ metadata:
   labels:
     strimzi.io/cluster: my-cluster
 spec:
-  replicas: 3
+  resources:
+    requests: # 0.5 코어, 2GB 메모리
+      cpu: "500m"
+      memory: "2Gi"
+    limits:
+      cpu: "500m"
+      memory: "2Gi"
+  jvmOptions: # JVM Heap 옵션 1GB 메모리
+    -Xms: 1g
+    -Xmx: 1g
+  replicas: 1
   roles:
     - broker
   storage:
@@ -48,14 +68,12 @@ spec:
       message.max.bytes: 15728640
       replica.fetch.max.bytes: 15728640
     listeners:
-      - name: plain
-        port: 9092
-        type: internal
-        tls: false
-      - name: tls
-        port: 9093
-        type: internal
-        tls: true
-  entityOperator:
-    topicOperator: {}
-    userOperator: {}
+    - name: plain
+      port: 9092
+      type: internal
+      tls: false
+    - name: tls
+      port: 9093
+      type: internal
+      tls: true
+
