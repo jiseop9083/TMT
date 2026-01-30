@@ -4,6 +4,7 @@ Kafka KRaft 클러스터에 프로듀서 부하를 걸고, 실행 중 수집한 
 이 README는 현재 디렉터리의 파일만 기준으로 설명합니다(압축 파일 제외).
 
 ## 디렉터리 구조
+
 - `experiments/benchmarks/`: 클러스터 구성, 프로듀서 실행, 실험 출력 수집 스크립트
 - `experiments/analyses/`: 결과 분석/시각화 스크립트 및 Java 분석 코드
 - `experiments/scripts/`: 자동 실행용 래퍼 스크립트
@@ -11,13 +12,16 @@ Kafka KRaft 클러스터에 프로듀서 부하를 걸고, 실행 중 수집한 
 - `experiments/figures/`: 그래프 이미지(생성물, Git 제외)
 
 ## 요구사항
+
 - Kubernetes 클러스터 접근 권한
 - `kubectl`, `helm`, `docker`
 - Python 3 (`matplotlib` 필요)
 - JDK 21 이상(분석 시 `java`, `javac`, `jfr` 사용)
 
 ## 실행 흐름 (요약)
-1) 모니터링/Strimzi 설치
+
+1. 모니터링/Strimzi 설치
+
 ```bash
 cd experiments/benchmarks
 ./apply_metrics_server.sh
@@ -25,14 +29,16 @@ cd experiments/benchmarks
 ./install_strimzi.sh
 ```
 
-2) Kafka 클러스터 배포 (auto.create.topics.enable 제어)
+2. Kafka 클러스터 배포 (auto.create.topics.enable 제어)
+
 ```bash
 cd experiments/benchmarks
 ./apply_cluster.sh True   # auto.create.topics.enable=true
 ./apply_cluster.sh False  # auto.create.topics.enable=false
 ```
 
-3) 프로듀서 실험 실행
+3. 프로듀서 실험 실행
+
 ```bash
 cd experiments/benchmarks
 ./script.sh --auto-create-topics=true
@@ -40,7 +46,8 @@ cd experiments/benchmarks
 ./script.sh --auto-create-topics=false
 ```
 
-4) 결과 분석 및 시각화
+4. 결과 분석 및 시각화
+
 ```bash
 # CSV 생성
 python3 experiments/benchmarks/analyze_experiments.py --out-dir experiments/benchmarks/out
@@ -50,7 +57,9 @@ python3 experiments/analyses/plot_experiments.py --out-dir experiments/benchmark
 ```
 
 ## 주요 스크립트/옵션
+
 ### `experiments/benchmarks/script.sh`
+
 - 역할: 프로듀서 컨테이너 빌드 → 실험 Pod 실행 → 결과 복사
 - 주요 옵션
   - `--auto-create-topics` (`true`/`false`)
@@ -64,6 +73,7 @@ python3 experiments/analyses/plot_experiments.py --out-dir experiments/benchmark
   - `OUTDIR`(default `experiments/benchmarks/out/<enabled|disabled>/run_<timestamp>`)
 
 ### `experiments/benchmarks/analyze_experiments.py`
+
 - 역할: 실험 결과를 CSV로 집계
 - 입력: 각 실험 디렉터리의 `metrics.txt`, `async.collapsed`, `app.log`, `jfr.jfr`
 - 옵션
@@ -72,6 +82,7 @@ python3 experiments/analyses/plot_experiments.py --out-dir experiments/benchmark
   - `--jfr-progress`: JFR 파싱 진행 로그 출력
 
 ### `experiments/analyses/plot_experiments.py`
+
 - 역할: CSV를 기반으로 그래프 생성
 - 생성 그래프: `e2e_latency.png`, `per_method_latency.png`, `cpu_load.png`, `memory_usage.png`
 - 옵션
@@ -80,6 +91,7 @@ python3 experiments/analyses/plot_experiments.py --out-dir experiments/benchmark
   - `--plot-dir`: 그래프 출력 경로 지정
 
 ## 출력물 구조 (예시)
+
 ```
 experiments/benchmarks/out/
   enabled/
@@ -102,6 +114,7 @@ experiments/benchmarks/out/
 ```
 
 ## 참고/주의
+
 - `experiments/scripts/auto_topic_*.sh`는 동일 디렉터리에 있는 스크립트를 호출하도록 작성되어 있습니다.  
   현재 실제 스크립트는 `experiments/benchmarks/`에 있으므로, 실행 시 경로를 맞추거나 직접 `experiments/benchmarks/`에서 실행하는 것을 권장합니다.
 - `experiments/output`, `experiments/figures`는 생성물 디렉터리로 `.gitignore`에 포함되어 있습니다.
