@@ -1,6 +1,3 @@
-/out
-
-**/out
-**/async-profiler-**
-
+**/output
+**/figures
 .DS_Store
