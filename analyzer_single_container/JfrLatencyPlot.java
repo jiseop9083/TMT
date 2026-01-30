@@ -100,10 +100,10 @@ public class JfrLatencyPlot {
             }
             rows.sort(Comparator.comparingDouble(r -> r.topicCount));
 
-            plotE2eLatency(rows, plotDir.resolve("e2e_latency.png"), "E2E latency", drawRegression);
+            plotE2eLatency(rows, plotDir.resolve("e2e_latency.png"), "E2E Latency", drawRegression);
             plotDelayBreakdown(rows, plotDir.resolve("delay_message_send.png"),
                     plotDir.resolve("delay_wait_on_metadata.png"),
-                    "messageSend latency", "waitOnMetadata latency", drawRegression);
+                    "req-res Latency", "waitOnMetadata Latency", drawRegression);
 
             System.out.println("Wrote plots to " + plotDir);
         }
@@ -126,12 +126,12 @@ public class JfrLatencyPlot {
                     Files.createDirectories(combinedPlotDir);
                     plotE2eLatency(allRows,
                             combinedPlotDir.resolve("e2e_latency_all_runs.png"),
-                            "E2E latency (all runs)", drawRegression);
+                            "E2E Latency", drawRegression);
                     plotDelayBreakdown(allRows,
                             combinedPlotDir.resolve("delay_message_send_all_runs.png"),
                             combinedPlotDir.resolve("delay_wait_on_metadata_all_runs.png"),
-                            "messageSend latency (all runs)",
-                            "waitOnMetadata latency (all runs)",
+                            "req-res Latency",
+                            "waitOnMetadata Latency",
                             drawRegression);
                 }
             }
@@ -271,7 +271,7 @@ public class JfrLatencyPlot {
             xs.add(row.topicCount);
             ys.add(row.producerE2eMs);
         }
-        PlotSpec spec = new PlotSpec(title, "# of topic", "latency(ms)");
+        PlotSpec spec = new PlotSpec(title, "Number of Topics", "Latency (ms)");
         renderScatterPlot(xs, ys, spec, outPath, Color.decode("#2F6BFF"), drawRegression);
     }
 
@@ -287,8 +287,8 @@ public class JfrLatencyPlot {
             produceCompletion.add(row.produceCompletionMs);
             waitOnMetadata.add(row.waitOnMetadataMs);
         }
-        PlotSpec messageSpec = new PlotSpec(messageTitle, "# of topic", "latency(ms)");
-        PlotSpec metadataSpec = new PlotSpec(metadataTitle, "# of topic", "latency(ms)");
+        PlotSpec messageSpec = new PlotSpec(messageTitle, "Number of Topics", "Latency (ms)");
+        PlotSpec metadataSpec = new PlotSpec(metadataTitle, "Number of Topics", "Latency (ms)");
         renderScatterPlot(xs, produceCompletion, messageSpec, messageSendPath,
                 Color.decode("#00A36C"), drawRegression);
         renderScatterPlot(xs, waitOnMetadata, metadataSpec, waitOnMetadataPath,
@@ -407,16 +407,6 @@ public class JfrLatencyPlot {
                 g.drawString(slopeLabel, midXp + 6, midYp - 8);
             }
             g.setStroke(new BasicStroke(1f));
-        }
-
-        int legendX = left + plotWidth - 160;
-        int legendY = top + 10;
-        g.setFont(new Font("SansSerif", Font.PLAIN, 12));
-        for (int i = 0; i < labels.size(); i++) {
-            g.setColor(colors.get(i));
-            g.fillRect(legendX, legendY + i * 18 - 8, 10, 10);
-            g.setColor(Color.decode("#111827"));
-            g.drawString(labels.get(i), legendX + 15, legendY + i * 18);
         }
 
         g.dispose();
