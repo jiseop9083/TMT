@@ -94,7 +94,7 @@ docker compose up -d kafka
 echo "Waiting for Kafka to be healthy..."
 timeout=60
 elapsed=0
-while ! docker compose exec kafka kafka-broker-api-versions.sh --bootstrap-server localhost:9092 &>/dev/null; do
+while ! docker compose exec kafka /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 &>/dev/null; do
   if [ $elapsed -ge $timeout ]; then
     echo "Error: Kafka failed to start within ${timeout} seconds"
     docker compose logs kafka
@@ -152,22 +152,8 @@ cp -r "${SCRIPT_DIR}/profiles/run/"* "${OUTDIR}/"
 
 # 브로커 JFR 파일 수집
 if [[ "${ENABLE_JFR}" == "true" ]]; then
-    echo "Dumping broker JFR recording..."
-
-    # Kafka PID 찾기 및 JFR 상태 확인
-    echo "Finding Kafka process and checking JFR status..."
-    docker compose exec -T kafka bash -c '
-        KAFKA_PID=$(pgrep -f "kafka\.Kafka")
-        echo "Kafka PID: $KAFKA_PID"
-
-        # JFR 녹화 상태 확인
-        echo "JFR recordings:"
-        jcmd $KAFKA_PID JFR.check
-
-        # JFR 덤프 생성
-        echo "Dumping JFR..."
-        jcmd $KAFKA_PID JFR.dump name=KafkaBroker filename=/profiles/kafka-broker.jfr
-    ' || echo "Warning: JFR dump failed"
+    echo "Stopping Kafka to flush broker JFR recording..."
+    docker compose stop kafka || echo "Warning: failed to stop kafka"
 
     # 덤프 완료를 위해 잠시 대기
     sleep 3
