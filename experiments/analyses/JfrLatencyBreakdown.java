@@ -44,6 +44,7 @@ public class JfrLatencyBreakdown {
     static final String FUTURE_RECORD_METADATA_CLASS =
             "org.apache.kafka.clients.producer.internals.FutureRecordMetadata";
     static final Pattern PRODUCER_ID_PATTERN = Pattern.compile("producer-(\\d+)");
+    static final String PRODUCER_JSONL_NAME = "kafka-producer-events.jsonl";
 
     // 이벤트 집계 결과를 담는 구조체
     static class EventTotals {
@@ -123,6 +124,8 @@ public class JfrLatencyBreakdown {
 
                 String baseName = baseName(jfrPath.getFileName().toString());
                 Path jsonPath = jsonDir.resolve(expDir.getFileName() + "-" + baseName + "-events.jsonl");
+                System.out.println("JFR source: " + jfrPath);
+                System.out.println("JSONL output: " + jsonPath);
                 writeEventsJson(jfrPath, jsonPath);
                 EventTotals totals = parseEventsJson(jsonPath);
 
@@ -176,7 +179,9 @@ public class JfrLatencyBreakdown {
             throw new IllegalStateException("JFR not found under " + runDir);
         }
 
-        Path jsonPath = jsonDir.resolve(baseName(jfrPath.getFileName().toString()) + "-events.jsonl");
+        Path jsonPath = jsonDir.resolve(PRODUCER_JSONL_NAME);
+        System.out.println("JFR source: " + jfrPath);
+        System.out.println("JSONL output: " + jsonPath);
         writeEventsJson(jfrPath, jsonPath);
 
         Map<String, String> metrics = readMetricsFromRunDir(runDir);
@@ -899,6 +904,14 @@ public class JfrLatencyBreakdown {
     }
 
     static Path findSingleJfr(Path runDir) throws IOException {
+        Path preferred = runDir.resolve("jfr.jfr");
+        if (Files.isRegularFile(preferred)) {
+            return preferred;
+        }
+        Path producer = findFirstMatchingRecursive(runDir, "producer-", ".jfr");
+        if (producer != null) {
+            return producer;
+        }
         List<Path> matches = new ArrayList<>();
         try (Stream<Path> stream = Files.walk(runDir, 4)) {
             stream.filter(Files::isRegularFile)
