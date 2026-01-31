@@ -40,11 +40,13 @@ public class JfrLatencyPlot {
 
         String outDirArg = "client_profile_job/out";
         String analysisDirArg = "";
+        String analysisBaseDirArg = "";
         String plotDirArg = "";
+        String combinedPlotDirArg = "";
         boolean useZscoreFilter = false;
         double zscoreThreshold = 3.0;
-        Double e2eMinMs = 0.0;
-        Double e2eMaxMs = 200.0;
+        Double e2eMinMs = 100.0;
+        Double e2eMaxMs = 300.0;
         Double breakdownMinMs = 0.0;
         Double breakdownMaxMs = 200.0;
         Double intervalMs = null;
@@ -57,8 +59,12 @@ public class JfrLatencyPlot {
                 outDirArg = args[++i];
             } else if ("--analysis-dir".equals(arg) && i + 1 < args.length) {
                 analysisDirArg = args[++i];
+            } else if ("--analysis-base-dir".equals(arg) && i + 1 < args.length) {
+                analysisBaseDirArg = args[++i];
             } else if ("--plot-dir".equals(arg) && i + 1 < args.length) {
                 plotDirArg = args[++i];
+            } else if ("--combined-plot-dir".equals(arg) && i + 1 < args.length) {
+                combinedPlotDirArg = args[++i];
             } else if ("--zscore".equals(arg) && i + 1 < args.length) {
                 useZscoreFilter = true;
                 zscoreThreshold = Double.parseDouble(args[++i]);
@@ -78,7 +84,8 @@ public class JfrLatencyPlot {
                 drawRegression = true;
             } else if ("--help".equals(arg)) {
                 System.out.println(
-                        "Usage: java JfrLatencyPlot --out-dir <dir> [--analysis-dir <dir>] [--plot-dir <dir>]\n" +
+                        "Usage: java JfrLatencyPlot --out-dir <dir> [--analysis-dir <dir>] [--analysis-base-dir <dir>]\n" +
+                        "       [--plot-dir <dir>] [--combined-plot-dir <dir>]\n" +
                         "       [--zscore <value>]\n" +
                         "       [--e2e-min-ms <value>] [--e2e-max-ms <value>]\n" +
                         "       [--breakdown-min-ms <value>] [--breakdown-max-ms <value>]\n" +
@@ -139,7 +146,10 @@ public class JfrLatencyPlot {
 
         if (analysisDirArg.isEmpty()) {
             Path baseOutDir = runDir.getParent() != null ? runDir.getParent() : runDir;
-            List<Path> runDirs = listRunDirs(baseOutDir);
+            Path analysisBaseDir = analysisBaseDirArg.isEmpty()
+                    ? baseOutDir
+                    : Paths.get(analysisBaseDirArg);
+            List<Path> runDirs = listRunDirs(analysisBaseDir);
             if (runDirs.size() > 1) {
                 List<Row> allRows = readAllRunRows(runDirs);
                 if (useZscoreFilter) {
@@ -151,7 +161,9 @@ public class JfrLatencyPlot {
                 }
                 if (!allRows.isEmpty()) {
                     allRows.sort(Comparator.comparingDouble(r -> r.topicCount));
-                    Path combinedPlotDir = baseOutDir.resolve("plots");
+                    Path combinedPlotDir = combinedPlotDirArg.isEmpty()
+                            ? baseOutDir.resolve("plots")
+                            : Paths.get(combinedPlotDirArg);
                     Files.createDirectories(combinedPlotDir);
                     plotE2eLatency(allRows,
                             combinedPlotDir.resolve("e2e_latency_all_runs.png"),
@@ -168,7 +180,10 @@ public class JfrLatencyPlot {
 
         if (analysisDirArg.isEmpty()) {
             Path baseOutDir = runDir.getParent() != null ? runDir.getParent() : runDir;
-            System.out.println("Wrote plots to " + baseOutDir.resolve("plots"));
+            Path combinedPlotDir = combinedPlotDirArg.isEmpty()
+                    ? baseOutDir.resolve("plots")
+                    : Paths.get(combinedPlotDirArg);
+            System.out.println("Wrote plots to " + combinedPlotDir);
         }
     }
 
@@ -655,11 +670,13 @@ public class JfrLatencyPlot {
     static List<Row> readAllRunRows(List<Path> runDirs) throws IOException {
         List<Row> rows = new ArrayList<>();
         for (Path runDir : runDirs) {
-            Path latencyCsv = runDir.resolve("analysis").resolve("latency_breakdown.csv");
+            Path latencyCsv = runDir.resolve("latency_breakdown.csv");
             if (!Files.exists(latencyCsv)) {
-                continue;
+                latencyCsv = runDir.resolve("analysis").resolve("latency_breakdown.csv");
             }
-            rows.addAll(readLatencyRows(latencyCsv));
+            if (Files.exists(latencyCsv)) {
+                rows.addAll(readLatencyRows(latencyCsv));
+            }
         }
         return rows;
     }

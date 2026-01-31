@@ -72,14 +72,17 @@ public class JfrLatencyBreakdown {
     // 실행 디렉터리의 JFR을 집계하고 CSV로 저장한다
     public static void main(String[] args) throws Exception {
         String outDirArg = "client_profile_job/out";
+        String analysisDirArg = "";
 
         for (int i = 0; i < args.length; i++) {
             String arg = args[i];
             if ("--out-dir".equals(arg) && i + 1 < args.length) {
                 outDirArg = args[++i];
+            } else if ("--analysis-dir".equals(arg) && i + 1 < args.length) {
+                analysisDirArg = args[++i];
             } else if ("--help".equals(arg)) {
                 System.out.println(
-                        "Usage: java JfrLatencyBreakdown --out-dir <dir>");
+                        "Usage: java JfrLatencyBreakdown --out-dir <dir> [--analysis-dir <dir>]");
                 return;
             } else {
                 throw new IllegalArgumentException("Unknown argument: " + arg);
@@ -88,7 +91,9 @@ public class JfrLatencyBreakdown {
 
         Path runDir = findRunDir(Paths.get(outDirArg));
 
-        Path analysisDir = runDir.resolve("analysis");
+        Path analysisDir = analysisDirArg.isEmpty()
+                ? runDir.resolve("analysis")
+                : Paths.get(analysisDirArg);
         Path jsonDir = analysisDir.resolve("json");
         Files.createDirectories(jsonDir);
         Path latencyCsv = analysisDir.resolve("latency_breakdown.csv");
@@ -197,7 +202,7 @@ public class JfrLatencyBreakdown {
         }
 
         EventTotals totalsAll = parseEventsJson(jsonPath);
-        writeSummaryCsv(runDir, totalsAll);
+        writeSummaryCsv(runDir, jsonDir.getParent(), totalsAll);
         List<JsonLine> events = readJsonEvents(jsonPath);
         List<JsonLine> waitEvents = new ArrayList<>();
         List<JsonLine> parkEvents = new ArrayList<>();
@@ -264,8 +269,8 @@ public class JfrLatencyBreakdown {
         }
     }
 
-    static void writeSummaryCsv(Path runDir, EventTotals totals) throws IOException {
-        Path summaryPath = runDir.resolve("analysis").resolve("summary.csv");
+    static void writeSummaryCsv(Path runDir, Path analysisDir, EventTotals totals) throws IOException {
+        Path summaryPath = analysisDir.resolve("summary.csv");
         try (BufferedWriter writer = Files.newBufferedWriter(summaryPath)) {
             writer.write("run_dir,");
             writer.write("socket_read_sender_ms,socket_read_sender_count,");

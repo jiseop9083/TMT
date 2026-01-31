@@ -92,30 +92,34 @@ python3 experiments/analyses/plot_experiments.py --out-dir experiments/benchmark
 
 ### `experiments/analyses/run_latency_pipeline.sh`
 
-- 용도: `experiments/output` 아래 `run_*` 결과를 분석해 `latency_breakdown.csv`와 그래프 PNG 생성
-- 기본 경로: `experiments/output` (필요 시 `--out-dir` 또는 첫 번째 인자로 경로 지정)
-- 그래프/CSV/JSON 저장: `experiments/figures` 아래로 `experiments/output`과 동일한 구조(단, `analysis` 디렉터리는 제외)
+- 용도: `run_*` 결과를 분석해 `latency_breakdown.csv`와 그래프 PNG 생성
+- 기본 동작: `--all-runs`가 기본값이라 지정한 경로 아래 모든 `run_*`를 처리
+- 입력 경로: `--out-dir` 또는 첫 번째 인자로 지정 (예: `output/enabled_with_jfr`, `experiments/output/...`)
+- 그래프/CSV/JSON 저장: 이제 `experiments/figures`에 직접 생성됨 (`output` 구조와 동일한 경로)
 - 예:
 
 ```bash
-# 최신 run 폴더 기준으로 전체 데이터 그래프
-experiments/analyses/run_latency_pipeline.sh
+# 최신 run이 아니라 모든 run_* 처리 (기본 동작)
+experiments/analyses/run_latency_pipeline.sh output/enabled_with_jfr
 
 # 특정 출력 경로에서 실행 + zscore 필터 + 회귀선
-experiments/analyses/run_latency_pipeline.sh experiments/output/disabled_with_jfr --zscore 2.33 --regression
+experiments/analyses/run_latency_pipeline.sh output/enabled_with_jfr --zscore 2.33 --regression
 
 # y축 범위/간격 지정
-experiments/analyses/run_latency_pipeline.sh --max-ms 300 --min-ms 10 --interval-ms 25
+experiments/analyses/run_latency_pipeline.sh output/enabled_with_jfr --e2e-max-ms 300 --e2e-min-ms 10 --interval-ms 25
 ```
 
 - 옵션
-  - `--out-dir <dir>`: 특정 run 디렉터리 또는 상위 디렉터리 지정
+  - `--out-dir <dir>`: 특정 run 디렉터리 또는 상위 디렉터리 지정 (생략 시 기본 경로)
+  - `--all-runs`: 지정 경로 아래 모든 `run_*` 처리 (기본값)
   - `--latency-only`: CSV 생성만 하고 그래프는 생성하지 않음
   - `--plot-only`: CSV 생성을 건너뛰고 그래프만 생성
   - `--zscore <number>`: 해당 z-score 기준으로 이상치 제외 (미지정 시 필터링 없음)
   - `--regression`: 그래프에 회귀선 표시
-  - `--max-ms <number>`: max-ms 초과 데이터 제외 + y축 상단 값 고정 (기본 200)
-  - `--min-ms <number>`: min-ms 미만 데이터 제외 + y축 하단 값 고정 (기본 0)
+  - `--e2e-max-ms <number>`: E2E max 초과 데이터 제외 + y축 상단 값 고정 (기본 300)
+  - `--e2e-min-ms <number>`: E2E min 미만 데이터 제외 + y축 하단 값 고정 (기본 100)
+  - `--breakdown-max-ms <number>`: breakdown max 초과 데이터 제외 + y축 상단 값 고정 (기본 200)
+  - `--breakdown-min-ms <number>`: breakdown min 미만 데이터 제외 + y축 하단 값 고정 (기본 0)
   - `--interval-ms <number>`: y축 눈금 간격
 
 ## 출력물 구조 (예시)
