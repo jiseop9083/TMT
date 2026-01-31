@@ -13,7 +13,7 @@ import java.util.concurrent.TimeUnit;
 public class ProduceMessages {
     public static void main(String[] args) throws Exception {
         Properties props = new Properties();
-        props.put("bootstrap.servers", "my-cluster-kafka-bootstrap:9092");
+        props.put("bootstrap.servers", "kafka:9092");
         props.put("key.serializer", "org.apache.kafka.common.serialization.StringSerializer");
         props.put("value.serializer", "org.apache.kafka.common.serialization.StringSerializer");
 
@@ -57,7 +57,7 @@ public class ProduceMessages {
         );
 
         Properties adminProps = new Properties();
-        adminProps.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, "my-cluster-kafka-bootstrap:9092");
+        adminProps.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, "kafka:9092");
 
         AdminClient admin = null;
         if (!autoCreateTopics) {
@@ -69,7 +69,7 @@ public class ProduceMessages {
         StringBuilder perMsg = new StringBuilder();
 
         try {
-            for (int i = 1; i <= 1000; i++) {
+            for (int i = 1; i <= 3000; i++) {
                 KafkaProducer<String, String> producer = new KafkaProducer<>(props);
                 String topic = "test_topic_" + i;
 
