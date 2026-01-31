@@ -27,7 +27,7 @@ RUN mkdir -p /app/lib /app/classes \
 
 # 실행 스크립트
 COPY custom_profile.jfc /custom_profile.jfc
-COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+COPY entry.sh /entry.sh
+RUN chmod +x /entry.sh
 
-ENTRYPOINT ["/entrypoint.sh"]
+ENTRYPOINT ["/entry.sh"]
