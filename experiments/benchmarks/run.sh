@@ -56,15 +56,15 @@ cd "${SCRIPT_DIR}"
 
 if [[ "${AUTO_CREATE_TOPICS}" == "true" ]]; then
   if [[ "${ENABLE_JFR}" == "true" ]]; then
-    MODE_DIR="enabled"
+    MODE_DIR="enabled_with_jfr"
   else
-    MODE_DIR="enabled_non_jfr"
+    MODE_DIR="enabled_without_jfr"
   fi
 else
   if [[ "${ENABLE_JFR}" == "true" ]]; then
-    MODE_DIR="disabled"
+    MODE_DIR="disabled_with_jfr"
   else
-    MODE_DIR="disabled_non_jfr"
+    MODE_DIR="disabled_without_jfr"
   fi
 fi
 
@@ -74,6 +74,7 @@ mkdir -p "${OUTDIR}"
 
 export AUTO_CREATE_TOPICS
 export ENABLE_JFR
+export ENABLE_BROKER_JFR="${ENABLE_JFR}"
 
 # Clean up profiles directory
 rm -rf "${SCRIPT_DIR}/profiles"
@@ -148,6 +149,40 @@ fi
 
 echo "Files detected. Copying results..."
 cp -r "${SCRIPT_DIR}/profiles/run/"* "${OUTDIR}/"
+
+# 브로커 JFR 파일 수집
+if [[ "${ENABLE_JFR}" == "true" ]]; then
+    echo "Dumping broker JFR recording..."
+
+    # Kafka PID 찾기 및 JFR 상태 확인
+    echo "Finding Kafka process and checking JFR status..."
+    docker compose exec -T kafka bash -c '
+        KAFKA_PID=$(pgrep -f "kafka\.Kafka")
+        echo "Kafka PID: $KAFKA_PID"
+
+        # JFR 녹화 상태 확인
+        echo "JFR recordings:"
+        jcmd $KAFKA_PID JFR.check
+
+        # JFR 덤프 생성
+        echo "Dumping JFR..."
+        jcmd $KAFKA_PID JFR.dump name=KafkaBroker filename=/profiles/kafka-broker.jfr
+    ' || echo "Warning: JFR dump failed"
+
+    # 덤프 완료를 위해 잠시 대기
+    sleep 3
+
+    # JFR 파일이 생성되었으면 복사
+    if [ -f "${SCRIPT_DIR}/profiles/broker/kafka-broker.jfr" ]; then
+        echo "Copying broker JFR file..."
+        cp "${SCRIPT_DIR}/profiles/broker/kafka-broker.jfr" "${OUTDIR}/"
+        echo "✓ Broker JFR file copied"
+    else
+        echo "Warning: Broker JFR file not found at ${SCRIPT_DIR}/profiles/broker/kafka-broker.jfr"
+        echo "Checking broker profiles directory:"
+        ls -la "${SCRIPT_DIR}/profiles/broker/" 2>/dev/null || echo "Directory does not exist"
+    fi
+fi
 
 echo "✓ copied to ${OUTDIR}"
 

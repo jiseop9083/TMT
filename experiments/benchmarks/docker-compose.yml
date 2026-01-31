@@ -4,6 +4,7 @@ services:
   kafka:
     image: 'bitnamilegacy/kafka:3.3.2'
     container_name: kafka-benchmark
+    entrypoint: ["/kafka-entrypoint.sh"]
     environment:
       # KRaft mode settings
       - KAFKA_CFG_NODE_ID=1
@@ -25,8 +26,14 @@ services:
 
       # JVM settings
       - KAFKA_HEAP_OPTS=-Xms1g -Xmx1g
+
+      # JFR settings
+      - ENABLE_BROKER_JFR=${ENABLE_BROKER_JFR:-true}
     ports:
       - "9092:9092"
+    volumes:
+      - ./kafka-entrypoint.sh:/kafka-entrypoint.sh:ro
+      - ./profiles/broker:/profiles
     healthcheck:
       test: ["CMD-SHELL", "kafka-broker-api-versions.sh --bootstrap-server localhost:9092"]
       interval: 10s
