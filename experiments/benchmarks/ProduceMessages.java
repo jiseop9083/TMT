@@ -67,6 +67,12 @@ public class ProduceMessages {
 
         long sendTotalNs = 0;
         StringBuilder perMsg = new StringBuilder();
+        StringBuilder batchLog = new StringBuilder();
+
+        // 구간별 소요시간 측정을 위한 변수
+        long batchStartNs = System.nanoTime();
+        int batchSize = 500;
+        int currentBatch = 0;
 
         try {
             for (int i = 1; i <= 3000; i++) {
@@ -110,6 +116,24 @@ public class ProduceMessages {
                 
                 producer.flush();
                 producer.close();
+
+                // 500개 단위로 구간별 소요시간 기록
+                if (i % batchSize == 0) {
+                    long batchEndNs = System.nanoTime();
+                    long batchMs = (batchEndNs - batchStartNs) / 1_000_000;
+                    int rangeStart = currentBatch * batchSize + 1;
+                    int rangeEnd = (currentBatch + 1) * batchSize;
+
+                    batchLog.append("batch_").append(currentBatch + 1)
+                           .append("_range=").append(rangeStart).append("~").append(rangeEnd)
+                           .append(", elapsed_ms=").append(batchMs)
+                           .append(", avg_ms_per_topic=").append(batchMs / batchSize)
+                           .append("\n");
+
+                    // 다음 구간을 위한 초기화
+                    batchStartNs = System.nanoTime();
+                    currentBatch++;
+                }
             }
         } finally {
             if (admin != null) {
@@ -120,6 +144,9 @@ public class ProduceMessages {
         String metrics = ""
             + "timestamp=" + Instant.now() + "\n"
             + "send_ack_total_ms=" + (sendTotalNs / 1_000_000) + "\n"
+            + "\n=== Batch Performance ===\n"
+            + batchLog
+            + "\n=== Per Message Details ===\n"
             + perMsg;
 
         Files.createDirectories(metricsPath.getParent());
