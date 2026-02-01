@@ -134,12 +134,17 @@ public class JfrLatencyPlot {
             }
             rows.sort(Comparator.comparingDouble(r -> r.topicCount));
 
-            plotE2eLatency(rows, plotDir.resolve("e2e_latency.png"), "E2E Latency",
-                    drawRegression, e2eMinMs, e2eMaxMs, intervalMs);
+        plotE2eLatency(rows, plotDir.resolve("e2e_latency.png"), "E2E Latency",
+                drawRegression, e2eMinMs, e2eMaxMs, intervalMs);
+        if (hasNonNullColumn(rows, r -> r.produceCompletionMs)
+                || hasNonNullColumn(rows, r -> r.waitOnMetadataMs)) {
             plotDelayBreakdown(rows, plotDir.resolve("delay_message_send.png"),
                     plotDir.resolve("delay_wait_on_metadata.png"),
                     "req-res Latency", "waitOnMetadata Latency", drawRegression,
                     breakdownMinMs, breakdownMaxMs, intervalMs);
+        } else {
+            System.out.println("Skipping breakdown plots (no JFR data).");
+        }
 
             System.out.println("Wrote plots to " + plotDir);
         }
@@ -168,12 +173,17 @@ public class JfrLatencyPlot {
                     plotE2eLatency(allRows,
                             combinedPlotDir.resolve("e2e_latency_all_runs.png"),
                             "E2E Latency", drawRegression, e2eMinMs, e2eMaxMs, intervalMs);
-                    plotDelayBreakdown(allRows,
-                            combinedPlotDir.resolve("delay_message_send_all_runs.png"),
-                            combinedPlotDir.resolve("delay_wait_on_metadata_all_runs.png"),
-                            "req-res Latency",
-                            "waitOnMetadata Latency",
-                            drawRegression, breakdownMinMs, breakdownMaxMs, intervalMs);
+                    if (hasNonNullColumn(allRows, r -> r.produceCompletionMs)
+                            || hasNonNullColumn(allRows, r -> r.waitOnMetadataMs)) {
+                        plotDelayBreakdown(allRows,
+                                combinedPlotDir.resolve("delay_message_send_all_runs.png"),
+                                combinedPlotDir.resolve("delay_wait_on_metadata_all_runs.png"),
+                                "req-res Latency",
+                                "waitOnMetadata Latency",
+                                drawRegression, breakdownMinMs, breakdownMaxMs, intervalMs);
+                    } else {
+                        System.out.println("Skipping combined breakdown plots (no JFR data).");
+                    }
                 }
             }
         }
@@ -208,8 +218,8 @@ public class JfrLatencyPlot {
                 String[] parts = line.split(",", -1);
                 double topicCount = parseDouble(parts, idx, "topic_count");
                 double producerE2e = parseDouble(parts, idx, "producer_e2e_ms");
-                double produceCompletion = parseDouble(parts, idx, "produce_completion_ms");
-                double waitOnMetadata = parseDouble(parts, idx, "wait_on_metadata_ms");
+                double produceCompletion = parseNullableDouble(parts, idx, "produce_completion_ms");
+                double waitOnMetadata = parseNullableDouble(parts, idx, "wait_on_metadata_ms");
                 rows.add(new Row(topicCount, producerE2e, produceCompletion, waitOnMetadata));
             }
         }
@@ -254,6 +264,9 @@ public class JfrLatencyPlot {
                 case PRODUCE_COMPLETION -> row.produceCompletionMs;
                 case WAIT_ON_METADATA -> row.waitOnMetadataMs;
             };
+            if (Double.isNaN(v)) {
+                continue;
+            }
             sum += v;
             sumSq += v * v;
             n++;
@@ -269,6 +282,9 @@ public class JfrLatencyPlot {
 
     // z-score로 이상치 여부를 판정한다
     static boolean isOutlier(double value, Stats stats, double threshold) {
+        if (Double.isNaN(value) || stats.count == 0) {
+            return false;
+        }
         if (stats.stddev <= 0.0) {
             return false;
         }
@@ -304,6 +320,36 @@ public class JfrLatencyPlot {
         } catch (NumberFormatException ex) {
             return 0.0;
         }
+    }
+
+    static double parseNullableDouble(String[] parts, Map<String, Integer> idx, String key) {
+        Integer i = idx.get(key);
+        if (i == null || i < 0 || i >= parts.length) {
+            return Double.NaN;
+        }
+        String value = parts[i].trim();
+        if (value.isEmpty() || "null".equalsIgnoreCase(value)) {
+            return Double.NaN;
+        }
+        try {
+            return Double.parseDouble(value);
+        } catch (NumberFormatException ex) {
+            return Double.NaN;
+        }
+    }
+
+    interface RowField {
+        double value(Row row);
+    }
+
+    static boolean hasNonNullColumn(List<Row> rows, RowField field) {
+        for (Row row : rows) {
+            double v = field.value(row);
+            if (!Double.isNaN(v)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // E2E 지연 산포도를 저장한다
@@ -615,6 +661,9 @@ public class JfrLatencyPlot {
     }
 
     static boolean withinRange(double value, Double minMs, Double maxMs) {
+        if (Double.isNaN(value)) {
+            return false;
+        }
         if (minMs != null && value < minMs) {
             return false;
         }

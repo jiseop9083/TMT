@@ -117,15 +117,17 @@ public class JfrLatencyBreakdown {
 
             for (Path expDir : expDirs) {
                 Path jfrPath = findJfr(expDir);
-                if (jfrPath == null) {
-                    continue;
-                }
                 int experimentId = parseExperimentId(expDir.getFileName().toString());
                 Map<String, String> metrics = readMetrics(expDir);
                 String topic = metrics.getOrDefault("topic", "test_topic_" + experimentId);
                 int topicCount = inferTopicCount(topic, experimentId);
                 String producerE2eRaw = metrics.getOrDefault("send_ack_ms_1", "");
                 double producerE2e = parseDoublePrefix(producerE2eRaw);
+
+                if (jfrPath == null) {
+                    writeMissingJfrRow(writer, topic, topicCount, producerE2e, expDir.toString());
+                    continue;
+                }
 
                 String baseName = baseName(jfrPath.getFileName().toString());
                 Path jsonPath = jsonDir.resolve(expDir.getFileName() + "-" + baseName + "-events.jsonl");
@@ -180,21 +182,33 @@ public class JfrLatencyBreakdown {
 
     static void writeSingleRunRows(BufferedWriter writer, Path runDir, Path jsonDir) throws IOException {
         Path jfrPath = findSingleJfr(runDir);
-        if (jfrPath == null) {
-            throw new IllegalStateException("JFR not found under " + runDir);
-        }
-
-        Path jsonPath = jsonDir.resolve(PRODUCER_JSONL_NAME);
-        System.out.println("JFR source: " + jfrPath);
-        System.out.println("JSONL output: " + jsonPath);
-        writeEventsJson(jfrPath, jsonPath);
-
         Map<String, String> metrics = readMetricsFromRunDir(runDir);
         List<Double> e2eByTopic = extractSendAckMetrics(metrics);
         int topicCount = e2eByTopic.size();
         if (topicCount == 0) {
             throw new IllegalStateException("send_ack_ms_* not found in metrics under " + runDir);
         }
+
+        if (jfrPath == null) {
+            for (int i = 0; i < topicCount; i++) {
+                String topic = "test_topic_" + i;
+                writer.write(String.format(
+                        Locale.ROOT,
+                        "%s,%d,%.3f,null,null,null,%s",
+                        topic,
+                        i + 1,
+                        e2eByTopic.get(i),
+                        runDir.toString()
+                ));
+                writer.newLine();
+            }
+            return;
+        }
+
+        Path jsonPath = jsonDir.resolve(PRODUCER_JSONL_NAME);
+        System.out.println("JFR source: " + jfrPath);
+        System.out.println("JSONL output: " + jsonPath);
+        writeEventsJson(jfrPath, jsonPath);
 
         List<TopicTotals> totals = new ArrayList<>();
         for (int i = 0; i < topicCount; i++) {
@@ -267,6 +281,18 @@ public class JfrLatencyBreakdown {
             ));
             writer.newLine();
         }
+    }
+
+    static void writeMissingJfrRow(BufferedWriter writer, String topic, int topicCount, double producerE2e, String runDir) throws IOException {
+        writer.write(String.format(
+                Locale.ROOT,
+                "%s,%d,%.3f,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,%s",
+                topic,
+                topicCount,
+                producerE2e,
+                runDir
+        ));
+        writer.newLine();
     }
 
     static void writeSummaryCsv(Path runDir, Path analysisDir, EventTotals totals) throws IOException {
