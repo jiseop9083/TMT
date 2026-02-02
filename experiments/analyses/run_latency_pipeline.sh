@@ -254,6 +254,83 @@ copy_base_plots() {
   cp -f "$plots_dir/"* "$figures_base_dir/plots/" 2>/dev/null || true
 }
 
+write_e2e_csv() {
+  local figures_base_dir="$1"
+  if [[ -z "$figures_base_dir" ]]; then
+    return
+  fi
+  local out_csv="$figures_base_dir/e2e_by_run.csv"
+  local tmp_csv
+  tmp_csv="$(mktemp)"
+  local runs_list
+  runs_list="$(mktemp)"
+  local -a csvs
+  local run_count=0
+  for d in "$figures_base_dir"/run_* "$figures_base_dir"/202*; do
+    if [[ -d "$d" ]]; then
+      echo "$d"
+    fi
+  done | sort >"$runs_list"
+  if [[ ! -s "$runs_list" ]]; then
+    rm -f "$runs_list" "$tmp_csv"
+    return
+  fi
+  while IFS= read -r run_dir; do
+    local csv="$run_dir/latency_breakdown.csv"
+    if [[ -f "$csv" ]]; then
+      csvs+=("$csv")
+      run_count=$((run_count + 1))
+    fi
+  done <"$runs_list"
+  if [[ "$run_count" -eq 0 ]]; then
+    rm -f "$runs_list" "$tmp_csv"
+    return
+  fi
+  {
+    printf "topic_count"
+    for i in $(seq 1 "$run_count"); do
+      printf ",experiment_%d" "$i"
+    done
+    printf "\n"
+  } >"$tmp_csv"
+  awk -F',' -v OFS=',' -v runs="$run_count" '
+    FNR==1 {
+      fileIndex++
+      delete idx
+      for (i=1; i<=NF; i++) {
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", $i)
+        idx[$i]=i
+      }
+      next
+    }
+    {
+      tc=$(idx["topic_count"])
+      e2e=$(idx["producer_e2e_ms"])
+      if (tc == "" || e2e == "") next
+      sub(/^[[:space:]]+|[[:space:]]+$/, "", tc)
+      sub(/^[[:space:]]+|[[:space:]]+$/, "", e2e)
+      if (tc == "" || e2e == "") next
+      runIdx=fileIndex
+      key=tc SUBSEP runIdx
+      vals[key]=e2e
+      topics[tc]=1
+    }
+    END {
+      for (tc in topics) {
+        printf "%s", tc
+        for (r=1; r<=runs; r++) {
+          v=vals[tc SUBSEP r]
+          if (v == "") v="null"
+          printf ",%s", v
+        }
+        printf "\n"
+      }
+    }
+  ' "${csvs[@]}" | sort -t',' -k1,1n >>"$tmp_csv"
+  mv "$tmp_csv" "$out_csv"
+  rm -f "$runs_list"
+}
+
 if [[ -z "${RUN_IN_DOCKER:-}" ]]; then
   IMAGE_NAME="dynamic-analyses-analyzer"
   echo "Building docker image: ${IMAGE_NAME}"
@@ -395,3 +472,5 @@ else
   PLOT_ARGS+=(--plot-dir "$analysis_dir/plots")
 fi
 java -cp "$TMP_BUILD_DIR" JfrLatencyPlot "${PLOT_ARGS[@]}"
+
+write_e2e_csv "$figures_base_dir"
