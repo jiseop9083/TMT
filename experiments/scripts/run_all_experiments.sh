@@ -3,7 +3,7 @@
 # 각 실험 스크립트를 50번씩 반복 실행하는 스크립트
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-REPEAT_COUNT=50
+REPEAT_COUNT=1
 ANALYSES_SCRIPT="${SCRIPT_DIR}/../analyses/run_latency_pipeline.sh"
 ANALYSES_ZSCORE="${ANALYSES_ZSCORE:-}"
 ANALYSES_REGRESSION="${ANALYSES_REGRESSION:-0}"
@@ -74,7 +74,7 @@ for i in $(seq 1 ${REPEAT_COUNT}); do
     fi
 done
 echo "✓ Completed auto_topic_enabled (${REPEAT_COUNT} runs)"
-run_latency_pipeline "enabled_with_jfr"
+# run_latency_pipeline "enabled_with_jfr"
 
 # 3. auto_topic_enabled_non_jfr 실험 (50회)
 # echo ""

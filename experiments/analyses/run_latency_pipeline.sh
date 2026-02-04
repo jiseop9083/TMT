@@ -15,6 +15,7 @@ BREAKDOWN_MAX_MS="200"
 BREAKDOWN_MIN_MS="0"
 INTERVAL_MS=""
 ALL_RUNS=1
+ALL_RUNS_EXPLICIT=0
 
 usage() {
   cat <<'EOF'
@@ -97,6 +98,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --all-runs)
       ALL_RUNS=1
+      ALL_RUNS_EXPLICIT=1
       shift
       ;;
     --regression)
@@ -151,6 +153,15 @@ if [[ ! -d "$OUT_DIR" ]]; then
     OUT_DIR="${OUT_DIR/\/output\//\/experiments\/output\/}"
   elif [[ "$OUT_DIR" == *"/experiments/output/"* && -d "${OUT_DIR/\/experiments\/output\//\/output\/}" ]]; then
     OUT_DIR="${OUT_DIR/\/experiments\/output\//\/output\/}"
+  fi
+fi
+
+# If a specific run_* or dated directory is provided, default to single-run
+# unless the user explicitly requested --all-runs.
+if [[ "$ALL_RUNS_EXPLICIT" -eq 0 ]]; then
+  base_name="$(basename "$OUT_DIR")"
+  if [[ "$base_name" == run_* || "$base_name" == 202* ]]; then
+    ALL_RUNS=0
   fi
 fi
 
