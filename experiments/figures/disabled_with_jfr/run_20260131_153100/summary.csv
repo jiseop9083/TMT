@@ -1,0 +1,2 @@
+run_dir,socket_read_sender_ms,socket_read_sender_count,socket_write_sender_ms,socket_write_sender_count,gc_pause_ms,safepoint_wait_ms,admin_client_monitor_block_ms,producer_monitor_block_ms,alloc_samples_in_tlab_count,alloc_samples_outside_tlab_count,outside_tlab_ratio,sender_cpu_samples,cpu_machine_avg,cpu_machine_p95,cpu_machine_max
+experiments/output/disabled_with_jfr/run_20260131_153100,2.670,7,20446.490,53929,419.878,0.000,0.000,8.961,34748,10183,0.226636,982,0.065449,0.130899,0.130899
