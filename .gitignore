@@ -3,7 +3,12 @@
 *.csv
 .vscode/
 # SSH keys
+
 **/id_rsa
 **/id_rsa.pub
 **/*.pem
 **/*.key
+
+# outputs
+**/output/
+**/figures/

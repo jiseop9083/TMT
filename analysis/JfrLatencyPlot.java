@@ -1,0 +1,738 @@
+
+import java.awt.BasicStroke;
+import java.awt.Color;
+import java.awt.Font;
+import java.awt.Graphics2D;
+import java.awt.RenderingHints;
+import java.awt.image.BufferedImage;
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.nio.file.DirectoryStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+
+import javax.imageio.ImageIO;
+
+public class JfrLatencyPlot {
+    // CSV 한 행의 지표를 담는 데이터 컨테이너
+    static class Row {
+        final double topicCount;
+        final double producerE2eMs;
+        final double produceCompletionMs;
+        final double waitOnMetadataMs;
+
+        Row(double topicCount, double producerE2eMs, double produceCompletionMs, double waitOnMetadataMs) {
+            this.topicCount = topicCount;
+            this.producerE2eMs = producerE2eMs;
+            this.produceCompletionMs = produceCompletionMs;
+            this.waitOnMetadataMs = waitOnMetadataMs;
+        }
+    }
+
+    // 분석 결과 CSV를 읽어 지연 플롯 이미지를 생성하는 엔트리 포인트
+    public static void main(String[] args) throws Exception {
+        System.setProperty("java.awt.headless", "true");
+
+        String outDirArg = "client_profile_job/out";
+        String analysisDirArg = "";
+        String analysisBaseDirArg = "";
+        String plotDirArg = "";
+        String combinedPlotDirArg = "";
+        boolean useZscoreFilter = false;
+        double zscoreThreshold = 3.0;
+        Double e2eMinMs = 100.0;
+        Double e2eMaxMs = 300.0;
+        Double breakdownMinMs = 0.0;
+        Double breakdownMaxMs = 200.0;
+        Double intervalMs = null;
+        boolean aggregateOnly = false;
+        boolean drawRegression = false;
+
+        for (int i = 0; i < args.length; i++) {
+            String arg = args[i];
+            if ("--out-dir".equals(arg) && i + 1 < args.length) {
+                outDirArg = args[++i];
+            } else if ("--analysis-dir".equals(arg) && i + 1 < args.length) {
+                analysisDirArg = args[++i];
+            } else if ("--analysis-base-dir".equals(arg) && i + 1 < args.length) {
+                analysisBaseDirArg = args[++i];
+            } else if ("--plot-dir".equals(arg) && i + 1 < args.length) {
+                plotDirArg = args[++i];
+            } else if ("--combined-plot-dir".equals(arg) && i + 1 < args.length) {
+                combinedPlotDirArg = args[++i];
+            } else if ("--zscore".equals(arg) && i + 1 < args.length) {
+                useZscoreFilter = true;
+                zscoreThreshold = Double.parseDouble(args[++i]);
+            } else if ("--e2e-min-ms".equals(arg) && i + 1 < args.length) {
+                e2eMinMs = Double.parseDouble(args[++i]);
+            } else if ("--e2e-max-ms".equals(arg) && i + 1 < args.length) {
+                e2eMaxMs = Double.parseDouble(args[++i]);
+            } else if ("--breakdown-min-ms".equals(arg) && i + 1 < args.length) {
+                breakdownMinMs = Double.parseDouble(args[++i]);
+            } else if ("--breakdown-max-ms".equals(arg) && i + 1 < args.length) {
+                breakdownMaxMs = Double.parseDouble(args[++i]);
+            } else if ("--interval-ms".equals(arg) && i + 1 < args.length) {
+                intervalMs = Double.parseDouble(args[++i]);
+            } else if ("--aggregate-only".equals(arg)) {
+                aggregateOnly = true;
+            } else if ("--regression".equals(arg)) {
+                drawRegression = true;
+            } else if ("--help".equals(arg)) {
+                System.out.println(
+                        "Usage: java JfrLatencyPlot --out-dir <dir> [--analysis-dir <dir>] [--analysis-base-dir <dir>]\n" +
+                        "       [--plot-dir <dir>] [--combined-plot-dir <dir>]\n" +
+                        "       [--zscore <value>]\n" +
+                        "       [--e2e-min-ms <value>] [--e2e-max-ms <value>]\n" +
+                        "       [--breakdown-min-ms <value>] [--breakdown-max-ms <value>]\n" +
+                        "       [--interval-ms <value>]\n" +
+                        "       [--aggregate-only] [--regression]");
+                return;
+            } else {
+                throw new IllegalArgumentException("Unknown argument: " + arg);
+            }
+        }
+        if (e2eMinMs != null && e2eMaxMs != null && e2eMaxMs <= e2eMinMs) {
+            throw new IllegalArgumentException("--e2e-max-ms must be greater than --e2e-min-ms");
+        }
+        if (breakdownMinMs != null && breakdownMaxMs != null && breakdownMaxMs <= breakdownMinMs) {
+            throw new IllegalArgumentException("--breakdown-max-ms must be greater than --breakdown-min-ms");
+        }
+        if (intervalMs != null && intervalMs <= 0) {
+            throw new IllegalArgumentException("--interval-ms must be greater than 0");
+        }
+
+        Path outDir = Paths.get(outDirArg);
+        Path runDir = (analysisDirArg.isEmpty() && !aggregateOnly) ? findRunDir(outDir) : null;
+        if (!aggregateOnly) {
+            Path analysisDir = analysisDirArg.isEmpty()
+                    ? runDir.resolve("analysis")
+                    : Paths.get(analysisDirArg);
+            if (!Files.exists(analysisDir)) {
+                throw new IllegalStateException("analysis dir not found: " + analysisDir);
+            }
+
+            Path plotDir = plotDirArg.isEmpty() ? analysisDir.resolve("plots") : Paths.get(plotDirArg);
+            Files.createDirectories(plotDir);
+
+            Path latencyCsv = analysisDir.resolve("latency_breakdown.csv");
+            if (!Files.exists(latencyCsv)) {
+                throw new IllegalStateException("latency_breakdown.csv not found: " + latencyCsv);
+            }
+
+            List<Row> rows = readLatencyRows(latencyCsv);
+            if (useZscoreFilter) {
+                int before = rows.size();
+                rows = filterByZscore(rows, zscoreThreshold);
+                int after = rows.size();
+                System.out.println("Z-score filter threshold=" + zscoreThreshold
+                        + " rows " + before + " -> " + after);
+            }
+            rows.sort(Comparator.comparingDouble(r -> r.topicCount));
+
+        plotE2eLatency(rows, plotDir.resolve("e2e_latency.png"), "E2E Latency",
+                drawRegression, e2eMinMs, e2eMaxMs, intervalMs);
+        if (hasNonNullColumn(rows, r -> r.produceCompletionMs)
+                || hasNonNullColumn(rows, r -> r.waitOnMetadataMs)) {
+            plotDelayBreakdown(rows, plotDir.resolve("delay_message_send.png"),
+                    plotDir.resolve("delay_wait_on_metadata.png"),
+                    "req-res Latency", "waitOnMetadata Latency", drawRegression,
+                    breakdownMinMs, breakdownMaxMs, intervalMs);
+        } else {
+            System.out.println("Skipping breakdown plots (no JFR data).");
+        }
+
+            System.out.println("Wrote plots to " + plotDir);
+        }
+
+        if (analysisDirArg.isEmpty()) {
+            Path baseOutDir = runDir != null
+                    ? (runDir.getParent() != null ? runDir.getParent() : runDir)
+                    : outDir;
+            Path analysisBaseDir = analysisBaseDirArg.isEmpty()
+                    ? baseOutDir
+                    : Paths.get(analysisBaseDirArg);
+            List<Path> runDirs = listRunDirs(analysisBaseDir);
+            if (runDirs.size() > 1) {
+                List<Row> allRows = readAllRunRows(runDirs);
+                if (useZscoreFilter) {
+                    int before = allRows.size();
+                    allRows = filterByZscore(allRows, zscoreThreshold);
+                    int after = allRows.size();
+                    System.out.println("Z-score filter threshold=" + zscoreThreshold
+                            + " (all runs) rows " + before + " -> " + after);
+                }
+                if (!allRows.isEmpty()) {
+                    allRows.sort(Comparator.comparingDouble(r -> r.topicCount));
+                    Path combinedPlotDir = combinedPlotDirArg.isEmpty()
+                            ? baseOutDir.resolve("plots")
+                            : Paths.get(combinedPlotDirArg);
+                    Files.createDirectories(combinedPlotDir);
+                    plotE2eLatency(allRows,
+                            combinedPlotDir.resolve("e2e_latency_all_runs.png"),
+                            "E2E Latency", drawRegression, e2eMinMs, e2eMaxMs, intervalMs);
+                    if (hasNonNullColumn(allRows, r -> r.produceCompletionMs)
+                            || hasNonNullColumn(allRows, r -> r.waitOnMetadataMs)) {
+                        plotDelayBreakdown(allRows,
+                                combinedPlotDir.resolve("delay_message_send_all_runs.png"),
+                                combinedPlotDir.resolve("delay_wait_on_metadata_all_runs.png"),
+                                "req-res Latency",
+                                "waitOnMetadata Latency",
+                                drawRegression, breakdownMinMs, breakdownMaxMs, intervalMs);
+                    } else {
+                        System.out.println("Skipping combined breakdown plots (no JFR data).");
+                    }
+                }
+            }
+        }
+
+        if (analysisDirArg.isEmpty()) {
+            Path baseOutDir = runDir != null
+                    ? (runDir.getParent() != null ? runDir.getParent() : runDir)
+                    : outDir;
+            Path combinedPlotDir = combinedPlotDirArg.isEmpty()
+                    ? baseOutDir.resolve("plots")
+                    : Paths.get(combinedPlotDirArg);
+            System.out.println("Wrote plots to " + combinedPlotDir);
+        }
+    }
+
+    // latency_breakdown.csv에서 필요한 컬럼만 읽어 Row 리스트를 만든다
+    static List<Row> readLatencyRows(Path csvPath) throws IOException {
+        List<Row> rows = new ArrayList<>();
+        try (BufferedReader reader = Files.newBufferedReader(csvPath)) {
+            String headerLine = reader.readLine();
+            if (headerLine == null) {
+                return rows;
+            }
+            String[] headers = headerLine.split(",");
+            Map<String, Integer> idx = new HashMap<>();
+            for (int i = 0; i < headers.length; i++) {
+                idx.put(headers[i].trim(), i);
+            }
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (line.trim().isEmpty()) {
+                    continue;
+                }
+                String[] parts = line.split(",", -1);
+                double topicCount = parseDouble(parts, idx, "topic_count");
+                double producerE2e = parseDouble(parts, idx, "producer_e2e_ms");
+                double produceCompletion = parseNullableDouble(parts, idx, "produce_completion_ms");
+                double waitOnMetadata = parseNullableDouble(parts, idx, "wait_on_metadata_ms");
+                rows.add(new Row(topicCount, producerE2e, produceCompletion, waitOnMetadata));
+            }
+        }
+        return rows;
+    }
+
+    // z-score 기준으로 이상치를 제거한다
+    static List<Row> filterByZscore(List<Row> rows, double threshold) {
+        if (rows.isEmpty()) {
+            return rows;
+        }
+        Stats e2e = stats(rows, Metric.E2E);
+        Stats completion = stats(rows, Metric.PRODUCE_COMPLETION);
+        Stats metadata = stats(rows, Metric.WAIT_ON_METADATA);
+
+        List<Row> filtered = new ArrayList<>();
+        for (Row row : rows) {
+            if (isOutlier(row.producerE2eMs, e2e, threshold)) {
+                continue;
+            }
+            if (isOutlier(row.produceCompletionMs, completion, threshold)) {
+                continue;
+            }
+            if (isOutlier(row.waitOnMetadataMs, metadata, threshold)) {
+                continue;
+            }
+            filtered.add(row);
+        }
+        return filtered;
+    }
+
+    enum Metric { E2E, PRODUCE_COMPLETION, WAIT_ON_METADATA }
+
+    // 선택한 지표의 평균/표준편차를 계산한다
+    static Stats stats(List<Row> rows, Metric metric) {
+        double sum = 0.0;
+        double sumSq = 0.0;
+        int n = 0;
+        for (Row row : rows) {
+            double v = switch (metric) {
+                case E2E -> row.producerE2eMs;
+                case PRODUCE_COMPLETION -> row.produceCompletionMs;
+                case WAIT_ON_METADATA -> row.waitOnMetadataMs;
+            };
+            if (Double.isNaN(v)) {
+                continue;
+            }
+            sum += v;
+            sumSq += v * v;
+            n++;
+        }
+        if (n <= 1) {
+            return new Stats(sum, 0.0, n);
+        }
+        double mean = sum / n;
+        double variance = Math.max(0.0, (sumSq / n) - (mean * mean));
+        double stddev = Math.sqrt(variance);
+        return new Stats(mean, stddev, n);
+    }
+
+    // z-score로 이상치 여부를 판정한다
+    static boolean isOutlier(double value, Stats stats, double threshold) {
+        if (Double.isNaN(value) || stats.count == 0) {
+            return false;
+        }
+        if (stats.stddev <= 0.0) {
+            return false;
+        }
+        double z = (value - stats.mean) / stats.stddev;
+        return Math.abs(z) > threshold;
+    }
+
+    // 평균/표준편차/표본 수를 보관하는 구조체
+    static class Stats {
+        final double mean;
+        final double stddev;
+        final int count;
+
+        Stats(double mean, double stddev, int count) {
+            this.mean = mean;
+            this.stddev = stddev;
+            this.count = count;
+        }
+    }
+
+    // CSV 파트에서 숫자를 안전하게 파싱한다
+    static double parseDouble(String[] parts, Map<String, Integer> idx, String key) {
+        Integer i = idx.get(key);
+        if (i == null || i < 0 || i >= parts.length) {
+            return 0.0;
+        }
+        String value = parts[i].trim();
+        if (value.isEmpty()) {
+            return 0.0;
+        }
+        try {
+            return Double.parseDouble(value);
+        } catch (NumberFormatException ex) {
+            return 0.0;
+        }
+    }
+
+    static double parseNullableDouble(String[] parts, Map<String, Integer> idx, String key) {
+        Integer i = idx.get(key);
+        if (i == null || i < 0 || i >= parts.length) {
+            return Double.NaN;
+        }
+        String value = parts[i].trim();
+        if (value.isEmpty() || "null".equalsIgnoreCase(value)) {
+            return Double.NaN;
+        }
+        try {
+            return Double.parseDouble(value);
+        } catch (NumberFormatException ex) {
+            return Double.NaN;
+        }
+    }
+
+    interface RowField {
+        double value(Row row);
+    }
+
+    static boolean hasNonNullColumn(List<Row> rows, RowField field) {
+        for (Row row : rows) {
+            double v = field.value(row);
+            if (!Double.isNaN(v)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // E2E 지연 산포도를 저장한다
+    static void plotE2eLatency(List<Row> rows, Path outPath, String title, boolean drawRegression,
+                               Double minMs, Double maxMs, Double intervalMs)
+            throws IOException {
+        List<Double> xs = new ArrayList<>();
+        List<Double> ys = new ArrayList<>();
+        for (Row row : rows) {
+            if (!withinRange(row.producerE2eMs, minMs, maxMs)) {
+                continue;
+            }
+            xs.add(row.topicCount);
+            ys.add(row.producerE2eMs);
+        }
+        PlotSpec spec = new PlotSpec(title, "Number of Topics", "Latency (ms)");
+        renderScatterPlot(xs, ys, spec, outPath, Color.decode("#2F6BFF"),
+                drawRegression, minMs, maxMs, intervalMs);
+    }
+
+    // 메시지 전송/메타데이터 대기 지연을 시리즈로 그린다
+    static void plotDelayBreakdown(List<Row> rows, Path messageSendPath, Path waitOnMetadataPath,
+                                   String messageTitle, String metadataTitle, boolean drawRegression,
+                                   Double minMs, Double maxMs, Double intervalMs)
+            throws IOException {
+        List<Double> xs = new ArrayList<>();
+        List<Double> xsWait = new ArrayList<>();
+        List<Double> produceCompletion = new ArrayList<>();
+        List<Double> waitOnMetadata = new ArrayList<>();
+        for (Row row : rows) {
+            if (withinRange(row.produceCompletionMs, minMs, maxMs)) {
+                xs.add(row.topicCount);
+                produceCompletion.add(row.produceCompletionMs);
+            }
+        }
+        for (Row row : rows) {
+            if (withinRange(row.waitOnMetadataMs, minMs, maxMs)) {
+                xsWait.add(row.topicCount);
+                waitOnMetadata.add(row.waitOnMetadataMs);
+            }
+        }
+        PlotSpec messageSpec = new PlotSpec(messageTitle, "Number of Topics", "Latency (ms)");
+        PlotSpec metadataSpec = new PlotSpec(metadataTitle, "Number of Topics", "Latency (ms)");
+        renderScatterPlot(xs, produceCompletion, messageSpec, messageSendPath,
+                Color.decode("#00A36C"), drawRegression, minMs, maxMs, intervalMs);
+        renderScatterPlot(xsWait, waitOnMetadata, metadataSpec, waitOnMetadataPath,
+                Color.decode("#FF7A00"), drawRegression, minMs, maxMs, intervalMs);
+    }
+
+    // 플롯 메타데이터(제목/축 라벨) 묶음
+    static class PlotSpec {
+        final String title;
+        final String xLabel;
+        final String yLabel;
+
+        PlotSpec(String title, String xLabel, String yLabel) {
+            this.title = title;
+            this.xLabel = xLabel;
+            this.yLabel = yLabel;
+        }
+    }
+
+    // 단일 시리즈 산포도를 다중 시리즈 렌더러로 위임한다
+    static void renderScatterPlot(List<Double> xs, List<Double> ys, PlotSpec spec,
+                                  Path outPath, Color color, boolean drawRegression,
+                                  Double minMs, Double maxMs, Double intervalMs) throws IOException {
+        renderMultiSeriesPlot(xs, List.of(ys), List.of("E2E latency"),
+                List.of(color), spec, outPath, drawRegression, minMs, maxMs, intervalMs);
+    }
+
+    // 캔버스를 생성하고 축/격자/시리즈를 렌더링한다
+    static void renderMultiSeriesPlot(List<Double> xs, List<List<Double>> series,
+                                      List<String> labels, List<Color> colors,
+                                      PlotSpec spec, Path outPath, boolean drawRegression,
+                                      Double minMs, Double maxMs, Double intervalMs)
+            throws IOException {
+        int width = 900;
+        int height = 520;
+        int left = 70;
+        int right = 30;
+        int top = 50;
+        int bottom = 60;
+        int plotWidth = width - left - right;
+        int plotHeight = height - top - bottom;
+
+        double minX = min(xs);
+        double maxX = max(xs);
+        double minY = minSeries(series);
+        double maxY = maxSeries(series);
+        if (minMs != null) {
+            minY = minMs;
+        }
+        if (maxMs != null) {
+            maxY = maxMs;
+        }
+        if (maxX <= minX) {
+            maxX = minX + 1.0;
+        }
+        if (maxY <= minY) {
+            maxY = minY + 1.0;
+        }
+
+        BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g = image.createGraphics();
+        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        g.setColor(Color.WHITE);
+        g.fillRect(0, 0, width, height);
+
+        g.setColor(Color.decode("#E5E7EB"));
+        g.setStroke(new BasicStroke(1f));
+        int gridLines = 5;
+        for (int i = 0; i <= gridLines; i++) {
+            int y = top + (int) (plotHeight * (i / (double) gridLines));
+            g.drawLine(left, y, left + plotWidth, y);
+        }
+
+        g.setColor(Color.decode("#111827"));
+        g.setStroke(new BasicStroke(2f));
+        g.drawLine(left, top, left, top + plotHeight);
+        g.drawLine(left, top + plotHeight, left + plotWidth, top + plotHeight);
+
+        g.setFont(new Font("SansSerif", Font.BOLD, 16));
+        g.drawString(spec.title, left, 25);
+        g.setFont(new Font("SansSerif", Font.PLAIN, 12));
+        g.drawString(spec.xLabel, left + plotWidth / 2 - 30, height - 20);
+        g.drawString(spec.yLabel, 10, top + plotHeight / 2);
+
+        drawAxisTicks(g, left, top, plotWidth, plotHeight, minX, maxX, minY, maxY, intervalMs);
+
+        for (int s = 0; s < series.size(); s++) {
+            List<Double> ys = series.get(s);
+            Color color = colors.get(s);
+            g.setColor(color);
+            for (int i = 0; i < xs.size() && i < ys.size(); i++) {
+                double xVal = xs.get(i);
+                double yVal = ys.get(i);
+                int x = left + (int) ((xVal - minX) / (maxX - minX) * plotWidth);
+                int y = top + plotHeight - (int) ((yVal - minY) / (maxY - minY) * plotHeight);
+                g.fillOval(x - 3, y - 3, 6, 6);
+            }
+        }
+
+        if (drawRegression) {
+            g.setStroke(new BasicStroke(2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND,
+                    1f, new float[] {6f, 6f}, 0f));
+            for (int s = 0; s < series.size(); s++) {
+                List<Double> ys = series.get(s);
+                Regression line = regression(xs, ys);
+                if (line == null) {
+                    continue;
+                }
+                g.setColor(Color.decode("#DC2626"));
+                double y1 = clamp(line.intercept + line.slope * minX, minY, maxY);
+                double y2 = clamp(line.intercept + line.slope * maxX, minY, maxY);
+                int x1 = left;
+                int x2 = left + plotWidth;
+                int y1p = top + plotHeight - (int) ((y1 - minY) / (maxY - minY) * plotHeight);
+                int y2p = top + plotHeight - (int) ((y2 - minY) / (maxY - minY) * plotHeight);
+                g.drawLine(x1, y1p, x2, y2p);
+
+                double midX = (minX + maxX) / 2.0;
+                double midY = clamp(line.intercept + line.slope * midX, minY, maxY);
+                int midXp = left + (int) ((midX - minX) / (maxX - minX) * plotWidth);
+                int midYp = top + plotHeight - (int) ((midY - minY) / (maxY - minY) * plotHeight);
+                String slopeLabel = String.format(Locale.ROOT, "slope=%.4f", line.slope);
+                g.setFont(new Font("SansSerif", Font.BOLD, 12));
+                g.drawString(slopeLabel, midXp + 6, midYp - 8);
+            }
+            g.setStroke(new BasicStroke(1f));
+        }
+
+        g.dispose();
+        ImageIO.write(image, "png", outPath.toFile());
+    }
+
+    // 축 눈금과 라벨을 그린다
+    static void drawAxisTicks(Graphics2D g, int left, int top, int plotWidth, int plotHeight,
+                              double minX, double maxX, double minY, double maxY,
+                              Double intervalMs) {
+        g.setFont(new Font("SansSerif", Font.PLAIN, 11));
+        g.setColor(Color.decode("#374151"));
+
+        int ticks = 5;
+        for (int i = 0; i <= ticks; i++) {
+            double ratio = i / (double) ticks;
+            double xVal = minX + (maxX - minX) * ratio;
+            int x = left + (int) (plotWidth * ratio);
+            g.drawLine(x, top + plotHeight, x, top + plotHeight + 4);
+            String label = formatTick(xVal);
+            int labelWidth = g.getFontMetrics().stringWidth(label);
+            g.drawString(label, x - labelWidth / 2, top + plotHeight + 18);
+        }
+
+        if (intervalMs != null && intervalMs > 0) {
+            int steps = (int) Math.floor((maxY - minY) / intervalMs);
+            steps = Math.max(1, steps);
+            for (int i = 0; i <= steps; i++) {
+                double yVal = minY + intervalMs * i;
+                if (yVal > maxY + 1e-9) {
+                    break;
+                }
+                double ratio = (yVal - minY) / (maxY - minY);
+                int y = top + plotHeight - (int) (plotHeight * ratio);
+                g.drawLine(left - 4, y, left, y);
+                String yLabel = formatTick(yVal);
+                int yLabelWidth = g.getFontMetrics().stringWidth(yLabel);
+                g.drawString(yLabel, left - 8 - yLabelWidth, y + 4);
+            }
+        } else {
+            for (int i = 0; i <= ticks; i++) {
+                double ratio = i / (double) ticks;
+                double yVal = minY + (maxY - minY) * (1.0 - ratio);
+                int y = top + (int) (plotHeight * ratio);
+                g.drawLine(left - 4, y, left, y);
+                String yLabel = formatTick(yVal);
+                int yLabelWidth = g.getFontMetrics().stringWidth(yLabel);
+                g.drawString(yLabel, left - 8 - yLabelWidth, y + 4);
+            }
+        }
+    }
+
+    // 값 크기에 따라 적절한 소수점 자릿수로 표시한다
+    static String formatTick(double value) {
+        if (Math.abs(value) >= 1000) {
+            return String.format(Locale.ROOT, "%.0f", value);
+        }
+        if (Math.abs(value) >= 100) {
+            return String.format(Locale.ROOT, "%.1f", value);
+        }
+        if (Math.abs(value) >= 10) {
+            return String.format(Locale.ROOT, "%.2f", value);
+        }
+        return String.format(Locale.ROOT, "%.3f", value);
+    }
+
+    // 리스트 최소값(빈 경우 0)을 계산한다
+    static double min(List<Double> values) {
+        double min = Double.POSITIVE_INFINITY;
+        for (double v : values) {
+            min = Math.min(min, v);
+        }
+        return min == Double.POSITIVE_INFINITY ? 0.0 : min;
+    }
+
+    // 리스트 최대값(빈 경우 1)을 계산한다
+    static double max(List<Double> values) {
+        double max = Double.NEGATIVE_INFINITY;
+        for (double v : values) {
+            max = Math.max(max, v);
+        }
+        return max == Double.NEGATIVE_INFINITY ? 1.0 : max;
+    }
+
+    // 여러 시리즈 중 최대값을 구한다
+    static double maxSeries(List<List<Double>> series) {
+        double max = Double.NEGATIVE_INFINITY;
+        for (List<Double> values : series) {
+            max = Math.max(max, max(values));
+        }
+        return max == Double.NEGATIVE_INFINITY ? 1.0 : max;
+    }
+
+    static double minSeries(List<List<Double>> series) {
+        double min = Double.POSITIVE_INFINITY;
+        for (List<Double> values : series) {
+            min = Math.min(min, min(values));
+        }
+        return min == Double.POSITIVE_INFINITY ? 0.0 : min;
+    }
+
+    static class Regression {
+        final double slope;
+        final double intercept;
+
+        Regression(double slope, double intercept) {
+            this.slope = slope;
+            this.intercept = intercept;
+        }
+    }
+
+    static Regression regression(List<Double> xs, List<Double> ys) {
+        int n = Math.min(xs.size(), ys.size());
+        if (n < 2) {
+            return null;
+        }
+        double sumX = 0.0;
+        double sumY = 0.0;
+        double sumXX = 0.0;
+        double sumXY = 0.0;
+        for (int i = 0; i < n; i++) {
+            double x = xs.get(i);
+            double y = ys.get(i);
+            sumX += x;
+            sumY += y;
+            sumXX += x * x;
+            sumXY += x * y;
+        }
+        double denom = n * sumXX - sumX * sumX;
+        if (Math.abs(denom) < 1e-12) {
+            return null;
+        }
+        double slope = (n * sumXY - sumX * sumY) / denom;
+        double intercept = (sumY - slope * sumX) / n;
+        return new Regression(slope, intercept);
+    }
+
+    static double clamp(double value, double min, double max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
+    static boolean withinRange(double value, Double minMs, Double maxMs) {
+        if (Double.isNaN(value)) {
+            return false;
+        }
+        if (minMs != null && value < minMs) {
+            return false;
+        }
+        if (maxMs != null && value > maxMs) {
+            return false;
+        }
+        return true;
+    }
+
+    // 실행 결과 디렉터리(YYYY... 형식)를 찾아 반환한다
+    static Path findRunDir(Path base) throws IOException {
+        if (Files.isDirectory(base)) {
+            String name = base.getFileName().toString();
+            if (name.startsWith("202") || name.startsWith("run")) {
+                return base;
+            }
+        }
+        List<Path> candidates = new ArrayList<>();
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(base)) {
+            for (Path p : stream) {
+                if (Files.isDirectory(p)) {
+                    candidates.add(p);
+                }
+            }
+        }
+        candidates.sort(Comparator.naturalOrder());
+        if (candidates.size() == 1) {
+            return candidates.get(0);
+        }
+        if (candidates.size() > 1) {
+            return candidates.get(candidates.size() - 1);
+        }
+        throw new IOException("No run directories found under " + base);
+    }
+
+    static List<Path> listRunDirs(Path base) throws IOException {
+        List<Path> candidates = new ArrayList<>();
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(base)) {
+            for (Path p : stream) {
+                if (!Files.isDirectory(p)) {
+                    continue;
+                }
+                String name = p.getFileName().toString();
+                if (name.startsWith("202") || name.startsWith("run")) {
+                    candidates.add(p);
+                }
+            }
+        }
+        candidates.sort(Comparator.naturalOrder());
+        return candidates;
+    }
+
+    static List<Row> readAllRunRows(List<Path> runDirs) throws IOException {
+        List<Row> rows = new ArrayList<>();
+        for (Path runDir : runDirs) {
+            Path latencyCsv = runDir.resolve("latency_breakdown.csv");
+            if (!Files.exists(latencyCsv)) {
+                latencyCsv = runDir.resolve("analysis").resolve("latency_breakdown.csv");
+            }
+            if (Files.exists(latencyCsv)) {
+                rows.addAll(readLatencyRows(latencyCsv));
+            }
+        }
+        return rows;
+    }
+}
