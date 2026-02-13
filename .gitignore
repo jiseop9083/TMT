@@ -1,5 +1,5 @@
 .omc/
-**/.DS_Store
+.DS_Store
 *.csv
 
 # SSH keys
