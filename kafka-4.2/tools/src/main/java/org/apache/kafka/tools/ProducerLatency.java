@@ -63,7 +63,7 @@ public class ProducerLatency {
         String bootstrapServer = getArg(args, "--bootstrap-server", null);
         int numTopics = Integer.parseInt(getArg(args, "--num-topics", "3000"));
         String topicPrefix = getArg(args, "--topic-prefix", "test_topic_");
-        int recordSize = Integer.parseInt(getArg(args, "--record-size", "512"));
+        int recordSize = Integer.parseInt(getArg(args, "--record-size", "10485000"));
         String acks = getArg(args, "--acks", "1");
         String outputFile = getArg(args, "--output", null);
 
@@ -91,6 +91,7 @@ public class ProducerLatency {
         props.put(ProducerConfig.ACKS_CONFIG, acks);
         props.put(ProducerConfig.LINGER_MS_CONFIG, "0");
         props.put(ProducerConfig.BATCH_SIZE_CONFIG, "1"); // Disable batching for accurate latency
+        props.put(ProducerConfig.MAX_REQUEST_SIZE_CONFIG, "11534336"); // ~11MB to accommodate 10MB payloads + overhead
 
         // Generate random payload
         Random random = new Random();
