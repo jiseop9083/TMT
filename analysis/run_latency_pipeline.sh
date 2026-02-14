@@ -499,6 +499,7 @@ else
     run_dir="$(resolve_latest_run_dir "$OUT_DIR")"
     figures_run_dir="$(map_to_figures "$run_dir")"
     analysis_dir="${figures_run_dir}"
+    mkdir -p "$analysis_dir"
     java -cp "$TMP_BUILD_DIR" JfrLatencyBreakdown --out-dir "$OUT_DIR" --analysis-dir "$analysis_dir"
   fi
 
@@ -557,6 +558,7 @@ else
   run_dir="$(resolve_latest_run_dir "$OUT_DIR")"
   figures_run_dir="$(map_to_figures "$run_dir")"
   analysis_dir="${figures_run_dir}"
+  mkdir -p "$analysis_dir"
   PLOT_ARGS+=(--analysis-dir "$analysis_dir")
   PLOT_ARGS+=(--plot-dir "$analysis_dir/plots")
 fi

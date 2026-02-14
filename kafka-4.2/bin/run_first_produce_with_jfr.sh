@@ -18,6 +18,7 @@ JFC_FILE="${SCRIPT_DIR}/custom-profiling.jfc"
 JFR_MAX_SIZE=""
 DO_BUILD=1
 DO_FORMAT=1
+DO_CLEAN=1
 
 read_first_config_value() {
   local key="$1"
@@ -62,6 +63,37 @@ discover_existing_cluster_id() {
   return 0
 }
 
+list_log_dirs() {
+  local config_file="$1"
+  local log_dirs_raw
+  local dir
+  log_dirs_raw="$(read_first_config_value "log.dirs" "$config_file")"
+  if [[ -z "$log_dirs_raw" ]]; then
+    return 0
+  fi
+  IFS=',' read -r -a dirs <<<"$log_dirs_raw"
+  for dir in "${dirs[@]}"; do
+    dir="${dir#"${dir%%[![:space:]]*}"}"
+    dir="${dir%"${dir##*[![:space:]]}"}"
+    if [[ -n "$dir" ]]; then
+      echo "$dir"
+    fi
+  done
+  return 0
+}
+
+clean_storage_dirs() {
+  local config_file="$1"
+  local dir
+  while IFS= read -r dir; do
+    if [[ -z "$dir" ]]; then
+      continue
+    fi
+    echo "Removing storage directory: $dir"
+    rm -rf "$dir"
+  done < <(list_log_dirs "$config_file")
+}
+
 usage() {
   cat <<'EOF'
 Usage: run_producer_latency_with_jfr.sh [options]
@@ -88,6 +120,7 @@ Options:
   --jfc-file <path>               JFR config file (.jfc)
   --jfr-max-size <value>          JFR max size, e.g. 1g
   --skip-build                    Skip ./gradlew jar -PscalaVersion=2.13.17
+  --skip-clean                    Skip stopping broker and deleting log.dirs before format
   --skip-format                   Skip kafka-storage format
   --help                          Show this help
 EOF
@@ -107,6 +140,7 @@ while [[ $# -gt 0 ]]; do
     --jfc-file) JFC_FILE="${2:-}"; shift 2 ;;
     --jfr-max-size) JFR_MAX_SIZE="${2:-}"; shift 2 ;;
     --skip-build) DO_BUILD=0; shift ;;
+    --skip-clean) DO_CLEAN=0; shift ;;
     --skip-format) DO_FORMAT=0; shift ;;
     --help|-h) usage; exit 0 ;;
     *)
@@ -118,7 +152,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$OUTPUT_ROOT" ]]; then
-  OUTPUT_ROOT="${KAFKA_DIR}/output"
+  OUTPUT_ROOT="${KAFKA_DIR}/output/first-produce-with-jfr"
 fi
 if [[ -z "$RUN_ID" ]]; then
   RUN_ID="run_$(date +%Y%m%d_%H%M%S)"
@@ -227,6 +261,21 @@ trap 'rc=$?; cleanup "$rc"; exit "$rc"' EXIT
 if [[ "$DO_BUILD" -eq 1 ]]; then
   echo "Building Kafka jars..."
   (cd "$KAFKA_DIR" && ./gradlew jar -PscalaVersion=2.13.17)
+fi
+
+if [[ "$DO_CLEAN" -eq 1 ]]; then
+  echo "Stopping existing broker (if running)..."
+  EXISTING_BROKER_PID="$(find_broker_pid)"
+  if [[ -n "$EXISTING_BROKER_PID" ]]; then
+    stop_broker "$EXISTING_BROKER_PID" || true
+  fi
+  if pgrep -f "kafka\\.Kafka" >/dev/null 2>&1; then
+    pkill -f "kafka\\.Kafka" >/dev/null 2>&1 || true
+    sleep 2
+  fi
+
+  echo "Cleaning Kafka log.dirs from server config..."
+  clean_storage_dirs "$SERVER_CONFIG_PATH"
 fi
 
 if [[ "$DO_FORMAT" -eq 1 ]]; then
