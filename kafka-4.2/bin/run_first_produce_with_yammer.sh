@@ -17,10 +17,13 @@ SNAPSHOT_EVERY_TOPICS=300
 JMX_PORT=9999
 JMX_URL="service:jmx:rmi:///jndi/rmi://127.0.0.1:${JMX_PORT}/jmxrmi"
 OUTPUT_BASE="$KAFKA_HOME/output/first-produce-with-yammer"
+FD_SAMPLE_INTERVAL_SEC=2
+BROKER_PID=""
+FD_SAMPLER_PID=""
 
-declare -a SIZE_NAMES=("10KB")
-declare -a SIZE_BYTES=(10240)
-ITERATIONS=5
+declare -a SIZE_NAMES=("1MB")
+declare -a SIZE_BYTES=(1048576)
+ITERATIONS=10
 
 JMX_ATTRIBUTES="Count,Mean,Min,Max,95thPercentile,99thPercentile"
 declare -a JMX_OBJECTS=(
@@ -38,7 +41,131 @@ log() {
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
 }
 
+count_open_fds() {
+  local pid="$1"
+  if ! command -v lsof >/dev/null 2>&1; then
+    echo ""
+    return 1
+  fi
+  if [[ -z "$pid" ]] || ! kill -0 "$pid" 2>/dev/null; then
+    echo ""
+    return 1
+  fi
+  lsof -p "$pid" 2>/dev/null | tail -n +2 | wc -l | tr -d ' '
+}
+
+count_topic_dirs() {
+  local base_dir="$1"
+  if [[ ! -d "$base_dir" ]]; then
+    echo "0"
+    return 0
+  fi
+  find "$base_dir" -maxdepth 1 -type d -name 'test_topic_*' 2>/dev/null | wc -l | tr -d ' '
+}
+
+count_segment_files() {
+  local base_dir="$1"
+  if [[ ! -d "$base_dir" ]]; then
+    echo "0"
+    return 0
+  fi
+  find "$base_dir" -type f \( -name '*.log' -o -name '*.index' -o -name '*.timeindex' \) 2>/dev/null | wc -l | tr -d ' '
+}
+
+measure_storage_kb() {
+  local base_dir="$1"
+  if [[ ! -d "$base_dir" ]]; then
+    echo "0"
+    return 0
+  fi
+  du -sk "$base_dir" 2>/dev/null | awk '{print $1}'
+}
+
+measure_ps_stats() {
+  local pid="$1"
+  if ! command -v ps >/dev/null 2>&1; then
+    echo ",,,"
+    return 0
+  fi
+  local row
+  row="$(ps -p "$pid" -o %cpu=,rss=,vsz= 2>/dev/null | awk 'NR==1{print $1","$2","$3}')"
+  if [[ -z "$row" ]]; then
+    echo ",,,"
+  else
+    echo "$row"
+  fi
+}
+
+measure_heap_kb() {
+  local pid="$1"
+  if ! command -v jstat >/dev/null 2>&1; then
+    echo ","
+    return 0
+  fi
+  local gc_row
+  gc_row="$(jstat -gc "$pid" 2>/dev/null | awk 'NR==2{print $1","$2","$3","$4","$5","$6","$7","$8}')"
+  if [[ -z "$gc_row" ]]; then
+    echo ","
+    return 0
+  fi
+  IFS=',' read -r s0c s1c s0u s1u ec eu oc ou <<<"$gc_row"
+  awk -v s0c="${s0c:-0}" -v s1c="${s1c:-0}" -v ec="${ec:-0}" -v oc="${oc:-0}" \
+      -v s0u="${s0u:-0}" -v s1u="${s1u:-0}" -v eu="${eu:-0}" -v ou="${ou:-0}" \
+      'BEGIN{
+        committed=s0c+s1c+ec+oc;
+        used=s0u+s1u+eu+ou;
+        printf "%.0f,%.0f", used, committed;
+      }'
+}
+
+start_fd_sampler() {
+  local pid="$1"
+  local out_csv="$2"
+  if ! command -v lsof >/dev/null 2>&1; then
+    log "WARN: lsof not found; skipping FD sampling."
+    return 0
+  fi
+  if [[ -z "$pid" ]] || ! kill -0 "$pid" 2>/dev/null; then
+    log "WARN: Broker PID is not alive; skipping FD sampling."
+    return 0
+  fi
+
+  printf '%s\n' "timestamp,epoch_ms,broker_pid,open_fd_count,cpu_pct,rss_kb,vsz_kb,heap_used_kb,heap_committed_kb,storage_kb,topic_dir_count,segment_file_count" >"$out_csv"
+  (
+    while kill -0 "$pid" 2>/dev/null; do
+      local now epoch_ms fd_count ps_stats cpu_pct rss_kb vsz_kb heap_stats heap_used_kb heap_committed_kb
+      local storage_kb topic_dir_count segment_file_count
+      now="$(date '+%Y-%m-%d %H:%M:%S')"
+      epoch_ms="$(date '+%s%3N' 2>/dev/null || date '+%s000')"
+      fd_count="$(count_open_fds "$pid")"
+      ps_stats="$(measure_ps_stats "$pid")"
+      IFS=',' read -r cpu_pct rss_kb vsz_kb <<<"$ps_stats"
+      heap_stats="$(measure_heap_kb "$pid")"
+      IFS=',' read -r heap_used_kb heap_committed_kb <<<"$heap_stats"
+      storage_kb="$(measure_storage_kb "$LOG_DIR")"
+      topic_dir_count="$(count_topic_dirs "$LOG_DIR")"
+      segment_file_count="$(count_segment_files "$LOG_DIR")"
+      printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
+        "$now" "$epoch_ms" "$pid" "${fd_count:-}" "${cpu_pct:-}" "${rss_kb:-}" "${vsz_kb:-}" \
+        "${heap_used_kb:-}" "${heap_committed_kb:-}" "${storage_kb:-0}" "${topic_dir_count:-0}" "${segment_file_count:-0}" \
+        >>"$out_csv"
+      sleep "$FD_SAMPLE_INTERVAL_SEC"
+    done
+  ) &
+  FD_SAMPLER_PID=$!
+  log "Started FD sampler (PID: $FD_SAMPLER_PID), interval=${FD_SAMPLE_INTERVAL_SEC}s"
+}
+
+stop_fd_sampler() {
+  if [[ -n "${FD_SAMPLER_PID:-}" ]] && kill -0 "$FD_SAMPLER_PID" 2>/dev/null; then
+    kill "$FD_SAMPLER_PID" 2>/dev/null || true
+    wait "$FD_SAMPLER_PID" 2>/dev/null || true
+  fi
+  FD_SAMPLER_PID=""
+}
+
 stop_kafka() {
+  stop_fd_sampler
   log "Stopping Kafka broker..."
   "$KAFKA_HOME/bin/kafka-server-stop.sh" 2>/dev/null || true
   sleep 5
@@ -52,7 +179,29 @@ stop_kafka() {
 
 clean_logs() {
   log "Cleaning log directory: $LOG_DIR"
-  rm -rf "$LOG_DIR"
+  local max_attempts=8
+  local attempt=1
+
+  while [[ "$attempt" -le "$max_attempts" ]]; do
+    rm -rf "$LOG_DIR" 2>/dev/null || true
+    if [[ ! -e "$LOG_DIR" ]]; then
+      log "Log directory cleaned."
+      return
+    fi
+    log "Log directory cleanup retry (${attempt}/${max_attempts})..."
+    sleep 2
+    attempt=$((attempt + 1))
+  done
+
+  # Last resort: remove children first, then parent.
+  if [[ -d "$LOG_DIR" ]]; then
+    find "$LOG_DIR" -mindepth 1 -depth -exec rm -rf {} + 2>/dev/null || true
+    rmdir "$LOG_DIR" 2>/dev/null || true
+  fi
+  if [[ -e "$LOG_DIR" ]]; then
+    log "ERROR: Failed to clean log directory after retries: $LOG_DIR"
+    exit 1
+  fi
   log "Log directory cleaned."
 }
 
@@ -90,6 +239,7 @@ start_kafka() {
   log "Starting Kafka broker with JMX_PORT=${JMX_PORT}..."
   JMX_PORT="$JMX_PORT" "$KAFKA_HOME/bin/kafka-server-start.sh" "$CONFIG" >"$broker_log" 2>&1 &
   local kafka_pid=$!
+  BROKER_PID="$kafka_pid"
   log "Broker log: $broker_log"
   log "Kafka broker starting (PID: $kafka_pid)..."
 
@@ -136,11 +286,13 @@ run_experiment() {
 
   local output_dir="$OUTPUT_BASE/${size_name}"
   local producer_log_dir="$OUTPUT_BASE/${size_name}/logs/producer"
+  local fd_dir="$OUTPUT_BASE/${size_name}/fd"
   local jmx_dir="$OUTPUT_BASE/${size_name}/jmx"
-  mkdir -p "$output_dir" "$producer_log_dir" "$jmx_dir"
+  mkdir -p "$output_dir" "$producer_log_dir" "$jmx_dir" "$fd_dir"
 
   local output_file="$output_dir/producer_latency_results_${timestamp}.csv"
   local producer_log="$producer_log_dir/${timestamp}.log"
+  local fd_csv="$fd_dir/${timestamp}_broker_fd_count.csv"
   local jmx_post_csv="$jmx_dir/${timestamp}_post.csv"
   local jmx_post_log="$jmx_dir/${timestamp}_post.stderr.log"
 
@@ -150,9 +302,14 @@ run_experiment() {
   log "ACKS: ${ACKS}"
   log "Output CSV: ${output_file}"
   log "Producer log: ${producer_log}"
+  log "Broker FD CSV: ${fd_csv}"
   log "JMX post snapshot: ${jmx_post_csv}"
   log "=========================================="
 
+  start_fd_sampler "$BROKER_PID" "$fd_csv"
+
+  local producer_status=0
+  set +e
   "$KAFKA_HOME/bin/kafka-producer-latency.sh" \
     --bootstrap-server "$BOOTSTRAP_SERVER" \
     --num-topics "$NUM_TOPICS" \
@@ -172,11 +329,18 @@ run_experiment() {
         fi
       fi
     done
+  producer_status=$?
+  set -e
+  stop_fd_sampler
+  if [[ "$producer_status" -ne 0 ]]; then
+    log "ERROR: kafka-producer-latency.sh failed with exit code ${producer_status}"
+    exit "$producer_status"
+  fi
 
   log "Collecting JMX post snapshot..."
   collect_jmx_snapshot "$jmx_post_csv" "$jmx_post_log"
 
-  echo "${timestamp},${size_name},${iteration},${size_bytes},${output_file},${jmx_post_csv}" >>"$SUMMARY_CSV"
+  echo "${timestamp},${size_name},${iteration},${size_bytes},${output_file},${fd_csv},${jmx_post_csv}" >>"$SUMMARY_CSV"
   log "Experiment completed: ${size_name} iteration ${iteration}"
 }
 
@@ -189,7 +353,7 @@ log "JMX metrics request: Produce"
 log "============================================"
 
 SUMMARY_CSV="$OUTPUT_BASE/experiment_summary_$(date '+%Y%m%d_%H%M%S').csv"
-echo "timestamp,size_name,iteration,record_size_bytes,producer_csv,jmx_post_csv" >"$SUMMARY_CSV"
+echo "timestamp,size_name,iteration,record_size_bytes,producer_csv,broker_fd_csv,jmx_post_csv" >"$SUMMARY_CSV"
 
 experiment_num=0
 total_experiments=$((${#SIZE_NAMES[@]} * ITERATIONS))
