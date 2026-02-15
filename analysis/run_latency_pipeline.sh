@@ -355,20 +355,23 @@ write_e2e_csv() {
   rm -f "$runs_list"
 }
 
-find_latest_producer_csv() {
+list_producer_csvs() {
   local base_dir="$1"
-  local latest=""
-  if [[ -d "$base_dir" ]]; then
-    for f in "$base_dir"/producer_latency_results_*.csv; do
-      if [[ -f "$f" ]]; then
-        latest="$f"
-      fi
-    done
+  if [[ ! -d "$base_dir" ]]; then
+    return
   fi
-  echo "$latest"
+  local -a files=()
+  for f in "$base_dir"/producer_latency_results_*.csv; do
+    if [[ -f "$f" ]]; then
+      files+=("$f")
+    fi
+  done
+  if ((${#files[@]})); then
+    printf '%s\n' "${files[@]}" | sort
+  fi
 }
 
-convert_producer_csv_to_latency_csv() {
+append_producer_csv_as_latency_rows() {
   local in_csv="$1"
   local out_csv="$2"
   local run_label="$3"
@@ -378,7 +381,6 @@ convert_producer_csv_to_latency_csv() {
         gsub(/^[[:space:]]+|[[:space:]]+$/, "", $i)
         idx[$i]=i
       }
-      print "topic,topic_count,producer_e2e_ms,produce_completion_ms,e2e_completion_remainder_ms,wait_on_metadata_ms,run_dir"
       next
     }
     {
@@ -395,7 +397,72 @@ convert_producer_csv_to_latency_csv() {
       if (topicCount == "" || latency == "") next
       print topic, topicCount, latency, "null", "null", "null", run_dir
     }
-  ' "$in_csv" >"$out_csv"
+  ' "$in_csv" >>"$out_csv"
+}
+
+convert_producer_csvs_to_latency_csv() {
+  local out_csv="$1"
+  shift
+  if [[ $# -eq 0 ]]; then
+    return 1
+  fi
+  printf '%s\n' "topic,topic_count,producer_e2e_ms,produce_completion_ms,e2e_completion_remainder_ms,wait_on_metadata_ms,run_dir" >"$out_csv"
+  local csv=""
+  for csv in "$@"; do
+    append_producer_csv_as_latency_rows "$csv" "$out_csv" "$csv"
+  done
+}
+
+write_producer_summary_csv() {
+  local in_latency_csv="$1"
+  local out_csv="$2"
+  local tmp_csv
+  tmp_csv="$(mktemp)"
+  awk -F',' -v OFS=',' '
+    function trim(s) {
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", s)
+      return s
+    }
+    function is_number(s) {
+      return (s ~ /^-?[0-9]+([.][0-9]+)?([eE][+-]?[0-9]+)?$/)
+    }
+    NR==1 {
+      for (i=1; i<=NF; i++) {
+        h=trim($i)
+        idx[h]=i
+      }
+      topicCountIdx=idx["topic_count"]
+      e2eIdx=idx["producer_e2e_ms"]
+      next
+    }
+    {
+      if (topicCountIdx == "" || e2eIdx == "") next
+      tc=trim($(topicCountIdx))
+      e2e=trim($(e2eIdx))
+      if (tc == "" || e2e == "" || e2e == "null") next
+      if (!is_number(tc) || !is_number(e2e)) next
+      v=e2e+0.0
+      n[tc]++
+      sum[tc]+=v
+      sumsq[tc]+=(v*v)
+      if (!(tc in minv) || v < minv[tc]) minv[tc]=v
+      if (!(tc in maxv) || v > maxv[tc]) maxv[tc]=v
+    }
+    END {
+      for (tc in n) {
+        mean=sum[tc]/n[tc]
+        variance=(sumsq[tc]/n[tc])-(mean*mean)
+        if (variance < 0) variance=0
+        stddev=sqrt(variance)
+        printf "%s,%d,%.6f,%.6f,%.6f,%.6f\n", tc, n[tc], mean, stddev, minv[tc], maxv[tc]
+      }
+    }
+  ' "$in_latency_csv" | sort -t',' -k1,1n >"$tmp_csv"
+  {
+    printf '%s\n' "topic_count,sample_count,mean_e2e_ms,stddev_e2e_ms,min_e2e_ms,max_e2e_ms"
+    cat "$tmp_csv"
+  } >"$out_csv"
+  rm -f "$tmp_csv"
 }
 
 if [[ -z "${RUN_IN_DOCKER:-}" ]]; then
@@ -514,7 +581,9 @@ base_name="$(basename "$OUT_DIR")"
 if [[ "$base_name" == run_* || "$base_name" == 202* ]]; then
   figures_base_dir="$(map_to_figures "${OUT_DIR%/*}")"
 fi
+producer_csv_count=0
 latest_producer_csv=""
+producer_csv_first=""
 if [[ -d "$OUT_DIR" ]]; then
   has_runs=0
   for d in "$OUT_DIR"/run_* "$OUT_DIR"/202*; do
@@ -524,7 +593,16 @@ if [[ -d "$OUT_DIR" ]]; then
     fi
   done
   if [[ "$has_runs" -eq 0 ]]; then
-    latest_producer_csv="$(find_latest_producer_csv "$OUT_DIR")"
+    while IFS= read -r csv_path; do
+      if [[ -z "$csv_path" ]]; then
+        continue
+      fi
+      if [[ "$producer_csv_count" -eq 0 ]]; then
+        producer_csv_first="$csv_path"
+      fi
+      latest_producer_csv="$csv_path"
+      producer_csv_count=$((producer_csv_count + 1))
+    done < <(list_producer_csvs "$OUT_DIR")
   fi
 fi
 if [[ "$ZSCORE_FILTER" -eq 1 ]]; then
@@ -540,15 +618,25 @@ PLOT_ARGS+=(--breakdown-min-ms "$BREAKDOWN_MIN_MS")
 if [[ -n "$INTERVAL_MS" ]]; then
   PLOT_ARGS+=(--interval-ms "$INTERVAL_MS")
 fi
-if [[ -n "$latest_producer_csv" ]]; then
+if [[ "$producer_csv_count" -gt 0 ]]; then
   csv_plot_dir="${figures_base_dir%/}/csv_plot"
   mkdir -p "$csv_plot_dir"
   converted_latency_csv="$csv_plot_dir/latency_breakdown.csv"
-  convert_producer_csv_to_latency_csv "$latest_producer_csv" "$converted_latency_csv" "$latest_producer_csv"
+  producer_summary_csv="$csv_plot_dir/producer_e2e_summary.csv"
+  producer_csvs=()
+  while IFS= read -r csv_path; do
+    if [[ -n "$csv_path" ]]; then
+      producer_csvs+=("$csv_path")
+    fi
+  done < <(list_producer_csvs "$OUT_DIR")
+  convert_producer_csvs_to_latency_csv "$converted_latency_csv" "${producer_csvs[@]}"
+  write_producer_summary_csv "$converted_latency_csv" "$producer_summary_csv"
   PLOT_ARGS+=(--analysis-dir "$csv_plot_dir")
   PLOT_ARGS+=(--plot-dir "$csv_plot_dir/plots")
-  echo "Using source CSV: $latest_producer_csv"
+  echo "Using source CSV files: $producer_csv_count"
+  echo "CSV range: $producer_csv_first -> $latest_producer_csv"
   echo "Converted latency CSV: $converted_latency_csv"
+  echo "Producer summary CSV: $producer_summary_csv"
 elif [[ "$ALL_RUNS" -eq 1 ]]; then
   PLOT_ARGS+=(--aggregate-only)
   PLOT_ARGS+=(--analysis-base-dir "$figures_base_dir")
