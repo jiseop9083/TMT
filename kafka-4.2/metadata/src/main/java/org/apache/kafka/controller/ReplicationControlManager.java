@@ -622,84 +622,92 @@ public class ReplicationControlManager {
         ControllerRequestContext context,
         CreateTopicsRequestData request,
         Set<String> describable
-    ) {
-        Map<String, ApiError> topicErrors = new HashMap<>();
-        List<ApiMessageAndVersion> records = BoundedList.newArrayBacked(MAX_RECORDS_PER_USER_OP);
+    ) { 
+        // 토픽 생성시 변경된 메타데이터 계산 시간 측정
+        long createTopicsStartNs = System.nanoTime();
+        int requestedTopicCount = request.topics().size();
+        try {
+            Map<String, ApiError> topicErrors = new HashMap<>();
+            List<ApiMessageAndVersion> records = BoundedList.newArrayBacked(MAX_RECORDS_PER_USER_OP);
 
-        validateTotalNumberOfPartitions(request, defaultNumPartitions);
+            validateTotalNumberOfPartitions(request, defaultNumPartitions);
 
-        // Check the topic names.
-        validateNewTopicNames(topicErrors, request.topics(), topicsWithCollisionChars);
+            // Check the topic names.
+            validateNewTopicNames(topicErrors, request.topics(), topicsWithCollisionChars);
 
-        // Identify topics that already exist and mark them with the appropriate error
-        request.topics().stream().filter(creatableTopic -> topicsByName.containsKey(creatableTopic.name()))
-                .forEach(t -> topicErrors.put(t.name(), new ApiError(Errors.TOPIC_ALREADY_EXISTS,
-                    "Topic '" + t.name() + "' already exists.")));
+            // Identify topics that already exist and mark them with the appropriate error
+            request.topics().stream().filter(creatableTopic -> topicsByName.containsKey(creatableTopic.name()))
+                    .forEach(t -> topicErrors.put(t.name(), new ApiError(Errors.TOPIC_ALREADY_EXISTS,
+                        "Topic '" + t.name() + "' already exists.")));
 
-        // Verify that the configurations for the new topics are OK, and figure out what
-        // configurations should be created.
-        Map<ConfigResource, Map<String, Entry<OpType, String>>> configChanges =
-            computeConfigChanges(topicErrors, request.topics());
+            // Verify that the configurations for the new topics are OK, and figure out what
+            // configurations should be created.
+            Map<ConfigResource, Map<String, Entry<OpType, String>>> configChanges =
+                computeConfigChanges(topicErrors, request.topics());
 
-        // Try to create whatever topics are needed.
-        Map<String, CreatableTopicResult> successes = new HashMap<>();
-        for (CreatableTopic topic : request.topics()) {
-            if (topicErrors.containsKey(topic.name())) continue;
-            // Figure out what ConfigRecords should be created, if any.
-            ConfigResource configResource = new ConfigResource(TOPIC, topic.name());
-            Map<String, Entry<OpType, String>> keyToOps = configChanges.get(configResource);
-            List<ApiMessageAndVersion> configRecords;
-            if (keyToOps != null) {
-                ControllerResult<ApiError> configResult =
-                    configurationControl.incrementalAlterConfig(configResource, keyToOps, true);
-                if (configResult.response().isFailure()) {
-                    topicErrors.put(topic.name(), configResult.response());
-                    continue;
+            // Try to create whatever topics are needed.
+            Map<String, CreatableTopicResult> successes = new HashMap<>();
+            for (CreatableTopic topic : request.topics()) {
+                if (topicErrors.containsKey(topic.name())) continue;
+                // Figure out what ConfigRecords should be created, if any.
+                ConfigResource configResource = new ConfigResource(TOPIC, topic.name());
+                Map<String, Entry<OpType, String>> keyToOps = configChanges.get(configResource);
+                List<ApiMessageAndVersion> configRecords;
+                if (keyToOps != null) {
+                    ControllerResult<ApiError> configResult =
+                        configurationControl.incrementalAlterConfig(configResource, keyToOps, true);
+                    if (configResult.response().isFailure()) {
+                        topicErrors.put(topic.name(), configResult.response());
+                        continue;
+                    } else {
+                        configRecords = configResult.records();
+                    }
                 } else {
-                    configRecords = configResult.records();
+                    configRecords = List.of();
                 }
-            } else {
-                configRecords = List.of();
+                ApiError error;
+                try {
+                    error = createTopic(context, topic, records, successes, configRecords, describable.contains(topic.name()));
+                } catch (ApiException e) {
+                    error = ApiError.fromThrowable(e);
+                }
+                if (error.isFailure()) {
+                    topicErrors.put(topic.name(), error);
+                }
             }
-            ApiError error;
-            try {
-                error = createTopic(context, topic, records, successes, configRecords, describable.contains(topic.name()));
-            } catch (ApiException e) {
-                error = ApiError.fromThrowable(e);
-            }
-            if (error.isFailure()) {
-                topicErrors.put(topic.name(), error);
-            }
-        }
 
-        // Create responses for all topics.
-        CreateTopicsResponseData data = new CreateTopicsResponseData();
-        StringBuilder resultsBuilder = new StringBuilder();
-        String resultsPrefix = "";
-        for (CreatableTopic topic : request.topics()) {
-            ApiError error = topicErrors.get(topic.name());
-            if (error != null) {
-                data.topics().add(new CreatableTopicResult().
-                    setName(topic.name()).
-                    setErrorCode(error.error().code()).
-                    setErrorMessage(error.message()));
+            // Create responses for all topics.
+            CreateTopicsResponseData data = new CreateTopicsResponseData();
+            StringBuilder resultsBuilder = new StringBuilder();
+            String resultsPrefix = "";
+            for (CreatableTopic topic : request.topics()) {
+                ApiError error = topicErrors.get(topic.name());
+                if (error != null) {
+                    data.topics().add(new CreatableTopicResult().
+                        setName(topic.name()).
+                        setErrorCode(error.error().code()).
+                        setErrorMessage(error.message()));
+                    resultsBuilder.append(resultsPrefix).append(topic).append(": ").
+                        append(error.error()).append(" (").append(error.message()).append(")");
+                    resultsPrefix = ", ";
+                    continue;
+                }
+                CreatableTopicResult result = successes.get(topic.name());
+                data.topics().add(result);
                 resultsBuilder.append(resultsPrefix).append(topic).append(": ").
-                    append(error.error()).append(" (").append(error.message()).append(")");
+                    append("SUCCESS");
                 resultsPrefix = ", ";
-                continue;
             }
-            CreatableTopicResult result = successes.get(topic.name());
-            data.topics().add(result);
-            resultsBuilder.append(resultsPrefix).append(topic).append(": ").
-                append("SUCCESS");
-            resultsPrefix = ", ";
-        }
-        if (request.validateOnly()) {
-            log.info("Validate-only CreateTopics result(s): {}", resultsBuilder);
-            return ControllerResult.atomicOf(List.of(), data);
-        } else {
-            log.info("CreateTopics result(s): {}", resultsBuilder);
-            return ControllerResult.atomicOf(records, data);
+            if (request.validateOnly()) {
+                log.info("Validate-only CreateTopics result(s): {}", resultsBuilder);
+                return ControllerResult.atomicOf(List.of(), data);
+            } else {
+                log.info("CreateTopics result(s): {}", resultsBuilder);
+                return ControllerResult.atomicOf(records, data);
+            }
+        } finally {
+            log.info("TOPIC_CREATE_METRIC metric=createTopics duration_ns={} requested_topics={} correlation_id={}",
+                System.nanoTime() - createTopicsStartNs, requestedTopicCount, context.requestHeader().correlationId());
         }
     }
 

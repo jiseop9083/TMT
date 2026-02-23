@@ -20,6 +20,7 @@ package kafka.server.metadata
 import java.util.OptionalInt
 import kafka.coordinator.transaction.TransactionCoordinator
 import kafka.log.LogManager
+import kafka.server.TopicCreateLatencyTracker
 import kafka.server.share.SharePartitionManager
 import kafka.server.{KafkaConfig, ReplicaManager}
 import kafka.utils.Logging
@@ -116,6 +117,9 @@ class BrokerMetadataPublisher(
     newImage: MetadataImage,
     manifest: LoaderManifest
   ): Unit = {
+    // 토픽 생성시 브로커에 반영(메타데이터 캐싱) 레이턴시 측정 시작
+    val onMetadataUpdateStartNs = System.nanoTime()
+    val createdTopicNames = mutable.LinkedHashSet.empty[String]
     val highestOffsetAndEpoch = newImage.highestOffsetAndEpoch()
 
     val deltaName = if (_firstPublish) {
@@ -145,6 +149,12 @@ class BrokerMetadataPublisher(
 
       // Apply topic deltas.
       Option(delta.topicsDelta()).foreach { topicsDelta =>
+        topicsDelta.createdTopicIds().asScala.foreach { topicId =>
+          Option(newImage.topics().getTopic(topicId)).foreach { topicImage =>
+            createdTopicNames += topicImage.name()
+          }
+        }
+
         try {
           // Notify the replica manager about changes to topics.
           replicaManager.applyDelta(topicsDelta, newImage)
@@ -273,6 +283,21 @@ class BrokerMetadataPublisher(
       case t: Throwable => metadataPublishingFaultHandler.handleFault("Uncaught exception while " +
         s"publishing broker metadata from $deltaName", t)
     } finally {
+      // 토픽 생성시 브로커에 반영(메타데이터 캐싱) 레이턴시 측정 시작
+      // 토픽 생성 요청에 대해 E2E 레이턴시 측정 종료
+      val onMetadataUpdateEndNs = System.nanoTime()
+      val onMetadataUpdateDurationNs = onMetadataUpdateEndNs - onMetadataUpdateStartNs
+      if (createdTopicNames.nonEmpty) {
+        info(s"TOPIC_CREATE_METRIC metric=onMetadataUpdate duration_ns=$onMetadataUpdateDurationNs " +
+          s"created_topics=${createdTopicNames.size} metadata_offset=${highestOffsetAndEpoch.offset}")
+        createdTopicNames.foreach { topicName =>
+          TopicCreateLatencyTracker.removeStart(topicName).foreach { forwardStartNs =>
+            info(s"TOPIC_CREATE_METRIC metric=e2e topic=$topicName " +
+              s"latency_ns=${onMetadataUpdateEndNs - forwardStartNs} " +
+              s"metadata_offset=${highestOffsetAndEpoch.offset}")
+          }
+        }
+      }
       _firstPublish = false
       firstPublishFuture.complete(null)
     }

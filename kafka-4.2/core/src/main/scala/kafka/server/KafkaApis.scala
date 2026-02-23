@@ -128,6 +128,20 @@ class KafkaApis(val requestChannel: RequestChannel,
   }
 
   private def forwardToController(request: RequestChannel.Request): Unit = {
+    // 토픽 생성 요청에 대해 E2E 레이턴시 측정 시작
+    if (request.header.apiKey == ApiKeys.CREATE_TOPICS) {
+      val createTopicsRequest = request.body[CreateTopicsRequest]
+      if (!createTopicsRequest.data.validateOnly) {
+        val topicNames = createTopicsRequest.data.topics.asScala.map(_.name()).toSeq
+        if (topicNames.nonEmpty) {
+          val startNs = System.nanoTime()
+          TopicCreateLatencyTracker.trackAll(topicNames, startNs)
+          info(s"TOPIC_CREATE_METRIC metric=forwardToController topic_count=${topicNames.size} " +
+            s"correlation_id=${request.header.correlationId}")
+        }
+      }
+    }
+
     def responseCallback(responseOpt: Option[AbstractResponse]): Unit = {
       responseOpt match {
         case Some(response) => requestHelper.sendForwardedResponse(request, response)
