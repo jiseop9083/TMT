@@ -14,8 +14,8 @@ E2E_MIN_MS=""
 E2E_MAX_MS=""
 ON_METADATA_MIN_MS=""
 ON_METADATA_MAX_MS=""
-CREATE_TOPICS_MIN_US=""
-CREATE_TOPICS_MAX_US=""
+CREATE_TOPIC_MIN_US=""
+CREATE_TOPIC_MAX_US=""
 
 usage() {
   cat <<'EOF'
@@ -29,8 +29,8 @@ Options:
   --e2e-max-ms <v>      Y-axis max for e2e_latency.png
   --on-metadata-min-ms <v>  Y-axis min for on_metadata_duration.png
   --on-metadata-max-ms <v>  Y-axis max for on_metadata_duration.png
-  --create-topics-min-us <v> Y-axis min for create_topics_duration.png
-  --create-topics-max-us <v> Y-axis max for create_topics_duration.png
+  --create-topic-min-us <v> Y-axis min for create_topic_duration.png
+  --create-topic-max-us <v> Y-axis max for create_topic_duration.png
   --help                Show this help
 EOF
 }
@@ -78,11 +78,19 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --create-topics-min-us)
-      CREATE_TOPICS_MIN_US="$2"
+      CREATE_TOPIC_MIN_US="$2"
+      shift 2
+      ;;
+    --create-topic-min-us)
+      CREATE_TOPIC_MIN_US="$2"
       shift 2
       ;;
     --create-topics-max-us)
-      CREATE_TOPICS_MAX_US="$2"
+      CREATE_TOPIC_MAX_US="$2"
+      shift 2
+      ;;
+    --create-topic-max-us)
+      CREATE_TOPIC_MAX_US="$2"
       shift 2
       ;;
     --help|-h)
@@ -151,11 +159,11 @@ fi
 if [[ -n "$ON_METADATA_MAX_MS" ]]; then
   JAVA_ARGS+=(--on-metadata-max-ms "$ON_METADATA_MAX_MS")
 fi
-if [[ -n "$CREATE_TOPICS_MIN_US" ]]; then
-  JAVA_ARGS+=(--create-topics-min-us "$CREATE_TOPICS_MIN_US")
+if [[ -n "$CREATE_TOPIC_MIN_US" ]]; then
+  JAVA_ARGS+=(--create-topic-min-us "$CREATE_TOPIC_MIN_US")
 fi
-if [[ -n "$CREATE_TOPICS_MAX_US" ]]; then
-  JAVA_ARGS+=(--create-topics-max-us "$CREATE_TOPICS_MAX_US")
+if [[ -n "$CREATE_TOPIC_MAX_US" ]]; then
+  JAVA_ARGS+=(--create-topic-max-us "$CREATE_TOPIC_MAX_US")
 fi
 
 if [[ -n "$INPUT_CSV" ]]; then

@@ -134,7 +134,7 @@ pkill -f kafka.Kafka
 
 - `e2e_latency.png`
 - `on_metadata_duration.png`
-- `create_topics_duration.png`
+- `create_topic_duration.png`
 
 기본 실행:
 
@@ -161,11 +161,11 @@ analysis/run_create_topic_latency_plot_pipeline.sh \
   --input-dir kafka-4.2/output/topic_create_latency \
   --e2e-min-ms 20 --e2e-max-ms 80 \
   --on-metadata-min-ms 8 --on-metadata-max-ms 30 \
-  --create-topics-min-us 90 --create-topics-max-us 300
+  --create-topic-min-us 90 --create-topic-max-us 300
 ```
 
 참고:
 
 - 기본 통합 모드는 입력 디렉토리 내 모든 `topic_create_requests_*.csv`를 합쳐서 그립니다.
 - `e2e_latency_us`, `on_metadata_duration_us`는 그래프에서 `ms`로 변환해 표시합니다.
-- `create_topics_duration_us`는 `us` 단위 그대로 표시합니다.
+- `create_topic_duration_us`는 `us` 단위 그대로 표시합니다.

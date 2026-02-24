@@ -32,13 +32,13 @@ public class TopicCreateLatencyPlot {
         final int globalSeq;
         final Double e2eMs;
         final Double onMetadataMs;
-        final Double createTopicsUs;
+        final Double createTopicUs;
 
-        Row(int globalSeq, Double e2eMs, Double onMetadataMs, Double createTopicsUs) {
+        Row(int globalSeq, Double e2eMs, Double onMetadataMs, Double createTopicUs) {
             this.globalSeq = globalSeq;
             this.e2eMs = e2eMs;
             this.onMetadataMs = onMetadataMs;
-            this.createTopicsUs = createTopicsUs;
+            this.createTopicUs = createTopicUs;
         }
     }
 
@@ -52,8 +52,8 @@ public class TopicCreateLatencyPlot {
         Double e2eMaxMs = null;
         Double onMetadataMinMs = null;
         Double onMetadataMaxMs = null;
-        Double createTopicsMinUs = null;
-        Double createTopicsMaxUs = null;
+        Double createTopicMinUs = null;
+        Double createTopicMaxUs = null;
 
         for (int i = 0; i < args.length; i++) {
             String arg = args[i];
@@ -71,16 +71,16 @@ public class TopicCreateLatencyPlot {
                 onMetadataMinMs = Double.parseDouble(args[++i]);
             } else if ("--on-metadata-max-ms".equals(arg) && i + 1 < args.length) {
                 onMetadataMaxMs = Double.parseDouble(args[++i]);
-            } else if ("--create-topics-min-us".equals(arg) && i + 1 < args.length) {
-                createTopicsMinUs = Double.parseDouble(args[++i]);
-            } else if ("--create-topics-max-us".equals(arg) && i + 1 < args.length) {
-                createTopicsMaxUs = Double.parseDouble(args[++i]);
+            } else if (("--create-topic-min-us".equals(arg) || "--create-topics-min-us".equals(arg)) && i + 1 < args.length) {
+                createTopicMinUs = Double.parseDouble(args[++i]);
+            } else if (("--create-topic-max-us".equals(arg) || "--create-topics-max-us".equals(arg)) && i + 1 < args.length) {
+                createTopicMaxUs = Double.parseDouble(args[++i]);
             } else if ("--help".equals(arg) || "-h".equals(arg)) {
                 System.out.println(
                         "Usage: java TopicCreateLatencyPlot [--input-dir <path>] [--input-csv <path>] [--output-dir <path>]\n" +
                         "       [--e2e-min-ms <v>] [--e2e-max-ms <v>]\n" +
                         "       [--on-metadata-min-ms <v>] [--on-metadata-max-ms <v>]\n" +
-                        "       [--create-topics-min-us <v>] [--create-topics-max-us <v>]");
+                        "       [--create-topic-min-us <v>] [--create-topic-max-us <v>]");
                 return;
             } else {
                 throw new IllegalArgumentException("Unknown argument: " + arg);
@@ -138,7 +138,7 @@ public class TopicCreateLatencyPlot {
         drawScatter(
                 toPoints(rows, "e2e"),
                 "Topic Create E2E Latency",
-                "e2e_latency (ms)",
+                "E2E Latency (ms)",
                 outputDir.resolve("e2e_latency.png"),
                 new Color(47, 111, 223),
                 e2eMinMs,
@@ -146,19 +146,19 @@ public class TopicCreateLatencyPlot {
         drawScatter(
                 toPoints(rows, "onMeta"),
                 "Broker onMetadataUpdate Duration",
-                "on_metadata_duration (ms)",
+                "Broker Metadata Update Processing Time (ms)",
                 outputDir.resolve("on_metadata_duration.png"),
                 new Color(15, 157, 88),
                 onMetadataMinMs,
                 onMetadataMaxMs);
         drawScatter(
-                toPoints(rows, "createTopics"),
-                "Controller createTopics Duration",
-                "create_topics_duration (us)",
-                outputDir.resolve("create_topics_duration.png"),
+                toPoints(rows, "createTopic"),
+                "Controller Topic Creation Processing Time",
+                "Controller Topic Creation Processing Time (us)",
+                outputDir.resolve("create_topic_duration.png"),
                 new Color(209, 122, 0),
-                createTopicsMinUs,
-                createTopicsMaxUs);
+                createTopicMinUs,
+                createTopicMaxUs);
 
         System.out.println("Wrote plots to " + outputDir);
     }
@@ -201,7 +201,11 @@ public class TopicCreateLatencyPlot {
             int statusIdx = indexOf(headers, "status");
             int e2eIdx = indexOf(headers, "e2e_latency_us");
             int onMetaIdx = indexOf(headers, "on_metadata_duration_us");
-            int createIdx = indexOf(headers, "create_topics_duration_us");
+            int createIdx = indexOf(headers, "create_topic_duration_us");
+            if (createIdx < 0) {
+                // Backward compatibility for older CSV headers.
+                createIdx = indexOf(headers, "create_topics_duration_us");
+            }
 
             if (seqIdx < 0 || e2eIdx < 0 || onMetaIdx < 0 || createIdx < 0) {
                 throw new IllegalStateException("Required columns missing in CSV: " + csvPath);
@@ -238,8 +242,10 @@ public class TopicCreateLatencyPlot {
                 v = row.e2eMs;
             } else if ("onMeta".equals(metric)) {
                 v = row.onMetadataMs;
+            } else if ("createTopic".equals(metric)) {
+                v = row.createTopicUs;
             } else {
-                v = row.createTopicsUs;
+                v = null;
             }
             points.add(new Point(row.globalSeq, v));
         }

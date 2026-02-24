@@ -137,7 +137,7 @@ capture_controller_run_log() {
   fi
 }
 
-collect_recent_create_topics_values_ns() {
+collect_recent_create_topic_values_ns() {
   local out_file=$1
   local all_values_file
   all_values_file="$(mktemp)"
@@ -185,16 +185,16 @@ enrich_request_results_with_metrics() {
   local e2e_pairs_file="$temp_dir/e2e_pairs_us.csv"
   local on_metadata_values_ns_file="$temp_dir/on_metadata_values_ns.txt"
   local on_metadata_values_file="$temp_dir/on_metadata_values_us.txt"
-  local create_topics_values_ns_file="$temp_dir/create_topics_values_ns.txt"
-  local create_topics_values_file="$temp_dir/create_topics_values_us.txt"
+  local create_topic_values_ns_file="$temp_dir/create_topic_values_ns.txt"
+  local create_topic_values_file="$temp_dir/create_topic_values_us.txt"
   local enriched_csv="$temp_dir/topic_create_requests_enriched.csv"
 
   : > "$e2e_pairs_ns_file"
   : > "$e2e_pairs_file"
   : > "$on_metadata_values_ns_file"
   : > "$on_metadata_values_file"
-  : > "$create_topics_values_ns_file"
-  : > "$create_topics_values_file"
+  : > "$create_topic_values_ns_file"
+  : > "$create_topic_values_file"
 
   if [[ -n "$broker_log_path" && -f "$broker_log_path" ]]; then
     awk '
@@ -216,27 +216,27 @@ enrich_request_results_with_metrics() {
     :
   fi
 
-  collect_recent_create_topics_values_ns "$create_topics_values_ns_file"
+  collect_recent_create_topic_values_ns "$create_topic_values_ns_file"
 
   if [[ -s "$e2e_pairs_ns_file" ]]; then
     awk -F, '{printf "%s,%.0f\n", $1, $2 / 1000}' "$e2e_pairs_ns_file" > "$e2e_pairs_file"
   fi
   convert_ns_file_to_us_file "$on_metadata_values_ns_file" "$on_metadata_values_file"
-  convert_ns_file_to_us_file "$create_topics_values_ns_file" "$create_topics_values_file"
+  convert_ns_file_to_us_file "$create_topic_values_ns_file" "$create_topic_values_file"
 
-  local e2e_count on_metadata_count create_topics_count
+  local e2e_count on_metadata_count create_topic_count
   e2e_count=$(wc -l < "$e2e_pairs_file" | tr -d ' ')
   on_metadata_count=$(wc -l < "$on_metadata_values_file" | tr -d ' ')
-  create_topics_count=$(wc -l < "$create_topics_values_file" | tr -d ' ')
+  create_topic_count=$(wc -l < "$create_topic_values_file" | tr -d ' ')
   if [[ "$e2e_count" -gt 0 && "$on_metadata_count" -eq 0 ]]; then
     log "WARNING: e2e metric은 있는데 onMetadataUpdate metric 파싱 결과가 0건입니다. broker log를 확인하세요: $broker_log_path"
   fi
-  if [[ "$e2e_count" -gt 0 && "$create_topics_count" -eq 0 ]]; then
+  if [[ "$e2e_count" -gt 0 && "$create_topic_count" -eq 0 ]]; then
     log "WARNING: e2e metric은 있는데 createTopics metric 파싱 결과가 0건입니다. controller log를 확인하세요: $controller_log_source"
   fi
 
   printf "%s\n" \
-    "seq,topic_name,request_latency_us,e2e_latency_us,on_metadata_duration_us,create_topics_duration_us,status,error" \
+    "seq,topic_name,request_latency_us,e2e_latency_us,on_metadata_duration_us,create_topic_duration_us,status,error" \
     > "$enriched_csv"
 
   local line_no=0
@@ -246,13 +246,13 @@ enrich_request_results_with_metrics() {
     fi
     line_no=$((line_no + 1))
 
-    local e2e_latency_us on_metadata_duration_us create_topics_duration_us
+    local e2e_latency_us on_metadata_duration_us create_topic_duration_us
     e2e_latency_us=$(awk -F, -v topic="$topic_name" '$1 == topic { print $2; exit }' "$e2e_pairs_file")
     on_metadata_duration_us=$(sed -n "${line_no}p" "$on_metadata_values_file")
-    create_topics_duration_us=$(sed -n "${line_no}p" "$create_topics_values_file")
+    create_topic_duration_us=$(sed -n "${line_no}p" "$create_topic_values_file")
 
     printf "%s,%s,%s,%s,%s,%s,%s,%s\n" \
-      "$seq" "$topic_name" "$request_latency_us" "${e2e_latency_us:-}" "${on_metadata_duration_us:-}" "${create_topics_duration_us:-}" "$status" "$error" \
+      "$seq" "$topic_name" "$request_latency_us" "${e2e_latency_us:-}" "${on_metadata_duration_us:-}" "${create_topic_duration_us:-}" "$status" "$error" \
       >> "$enriched_csv"
   done < "$RESULT_CSV"
 
@@ -272,8 +272,8 @@ generate_experiment_summary() {
   local e2e_values_file="$temp_dir/e2e_values_us.txt"
   local on_metadata_values_ns_file="$temp_dir/on_metadata_values_ns.txt"
   local on_metadata_values_file="$temp_dir/on_metadata_values_us.txt"
-  local create_topics_values_ns_file="$temp_dir/create_topics_values_ns.txt"
-  local create_topics_values_file="$temp_dir/create_topics_values_us.txt"
+  local create_topic_values_ns_file="$temp_dir/create_topic_values_ns.txt"
+  local create_topic_values_file="$temp_dir/create_topic_values_us.txt"
   local request_values_file="$temp_dir/request_values_us.txt"
 
   if [[ -n "$broker_log_path" && -f "$broker_log_path" ]]; then
@@ -284,14 +284,14 @@ generate_experiment_summary() {
   else
     : > "$e2e_values_ns_file"
     : > "$on_metadata_values_ns_file"
-    : > "$create_topics_values_ns_file"
+    : > "$create_topic_values_ns_file"
   fi
 
-  collect_recent_create_topics_values_ns "$create_topics_values_ns_file"
+  collect_recent_create_topic_values_ns "$create_topic_values_ns_file"
 
   convert_ns_file_to_us_file "$e2e_values_ns_file" "$e2e_values_file"
   convert_ns_file_to_us_file "$on_metadata_values_ns_file" "$on_metadata_values_file"
-  convert_ns_file_to_us_file "$create_topics_values_ns_file" "$create_topics_values_file"
+  convert_ns_file_to_us_file "$create_topic_values_ns_file" "$create_topic_values_file"
 
   tail -n +2 "$RESULT_CSV" | cut -d, -f3 > "$request_values_file"
 
@@ -305,18 +305,18 @@ generate_experiment_summary() {
     forward_count=0
   fi
 
-  local e2e_stats on_metadata_stats create_topics_stats request_stats
+  local e2e_stats on_metadata_stats create_topic_stats request_stats
   e2e_stats=$(metric_stats_csv "$e2e_values_file")
   on_metadata_stats=$(metric_stats_csv "$on_metadata_values_file")
-  create_topics_stats=$(metric_stats_csv "$create_topics_values_file")
+  create_topic_stats=$(metric_stats_csv "$create_topic_values_file")
   request_stats=$(metric_stats_csv "$request_values_file")
 
   printf "%s\n" \
-    "timestamp,num_topics,interval_ms,partitions,replication_factor,forward_count,e2e_count,e2e_min_us,e2e_max_us,e2e_avg_us,e2e_p50_us,e2e_p95_us,e2e_p99_us,on_metadata_count,on_metadata_min_us,on_metadata_max_us,on_metadata_avg_us,on_metadata_p50_us,on_metadata_p95_us,on_metadata_p99_us,create_topics_count,create_topics_min_us,create_topics_max_us,create_topics_avg_us,create_topics_p50_us,create_topics_p95_us,create_topics_p99_us,request_count,request_min_us,request_max_us,request_avg_us,request_p50_us,request_p95_us,request_p99_us" \
+    "timestamp,num_topics,interval_ms,partitions,replication_factor,forward_count,e2e_count,e2e_min_us,e2e_max_us,e2e_avg_us,e2e_p50_us,e2e_p95_us,e2e_p99_us,on_metadata_count,on_metadata_min_us,on_metadata_max_us,on_metadata_avg_us,on_metadata_p50_us,on_metadata_p95_us,on_metadata_p99_us,create_topic_count,create_topic_min_us,create_topic_max_us,create_topic_avg_us,create_topic_p50_us,create_topic_p95_us,create_topic_p99_us,request_count,request_min_us,request_max_us,request_avg_us,request_p50_us,request_p95_us,request_p99_us" \
     > "$summary_csv"
 
   printf "%s\n" \
-    "$run_ts,$NUM_TOPICS,$INTERVAL_MS,$PARTITIONS,$REPLICATION_FACTOR,$forward_count,$e2e_stats,$on_metadata_stats,$create_topics_stats,$request_stats" \
+    "$run_ts,$NUM_TOPICS,$INTERVAL_MS,$PARTITIONS,$REPLICATION_FACTOR,$forward_count,$e2e_stats,$on_metadata_stats,$create_topic_stats,$request_stats" \
     >> "$summary_csv"
 
   rm -rf "$temp_dir"
