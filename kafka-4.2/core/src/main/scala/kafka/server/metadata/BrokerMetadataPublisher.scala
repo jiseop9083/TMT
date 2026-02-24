@@ -288,9 +288,11 @@ class BrokerMetadataPublisher(
       val onMetadataUpdateEndNs = System.nanoTime()
       val onMetadataUpdateDurationNs = onMetadataUpdateEndNs - onMetadataUpdateStartNs
       if (createdTopicNames.nonEmpty) {
-        info(s"TOPIC_CREATE_METRIC metric=onMetadataUpdate duration_ns=$onMetadataUpdateDurationNs " +
+        info(s"TOPIC_CREATE_METRIC metric=onMetadataUpdateBatch duration_ns=$onMetadataUpdateDurationNs " +
           s"created_topics=${createdTopicNames.size} metadata_offset=${highestOffsetAndEpoch.offset}")
         createdTopicNames.foreach { topicName =>
+          info(s"TOPIC_CREATE_METRIC metric=onMetadataUpdate topic=$topicName " +
+            s"duration_ns=$onMetadataUpdateDurationNs metadata_offset=${highestOffsetAndEpoch.offset}")
           TopicCreateLatencyTracker.removeStart(topicName).foreach { forwardStartNs =>
             info(s"TOPIC_CREATE_METRIC metric=e2e topic=$topicName " +
               s"latency_ns=${onMetadataUpdateEndNs - forwardStartNs} " +

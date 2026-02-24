@@ -666,10 +666,14 @@ public class ReplicationControlManager {
                     configRecords = List.of();
                 }
                 ApiError error;
+                long createTopicStartNs = System.nanoTime();
                 try {
                     error = createTopic(context, topic, records, successes, configRecords, describable.contains(topic.name()));
                 } catch (ApiException e) {
                     error = ApiError.fromThrowable(e);
+                } finally {
+                    log.info("TOPIC_CREATE_METRIC metric=createTopic topic={} duration_ns={} correlation_id={}",
+                        topic.name(), System.nanoTime() - createTopicStartNs, context.requestHeader().correlationId());
                 }
                 if (error.isFailure()) {
                     topicErrors.put(topic.name(), error);
