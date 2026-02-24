@@ -132,9 +132,9 @@ pkill -f kafka.Kafka
 
 토픽 생성 실험 CSV(`topic_create_requests_*.csv`)를 통합해서 아래 3개 그래프를 생성합니다.
 
-- `e2e_latency.png`
-- `on_metadata_duration.png`
-- `create_topic_duration.png`
+- `e2e_latency_ms.png`
+- `broker_metadata_update_ms.png`
+- `controller_topic_creation_us.png`
 
 기본 실행:
 
@@ -159,9 +159,9 @@ Y축 범위 제한 예시:
 ```bash
 analysis/run_create_topic_latency_plot_pipeline.sh \
   --input-dir kafka-4.2/output/topic_create_latency \
-  --e2e-min-ms 20 --e2e-max-ms 80 \
-  --on-metadata-min-ms 8 --on-metadata-max-ms 30 \
-  --create-topic-min-us 90 --create-topic-max-us 300
+  --e2e-min-ms 0 --e2e-max-ms 100 \
+  --broker-metadata-update-min-ms 0 --broker-metadata-update-max-ms 100 \
+  --controller-topic-creation-min-us 0 --controller-topic-creation-max-us 800
 ```
 
 참고:

@@ -10,12 +10,12 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 INPUT_DIR="$ROOT_DIR/kafka-4.2/output/topic_create_latency"
 INPUT_CSV=""
 OUTPUT_DIR="$ROOT_DIR/kafka-4.2/figures/create-topic-latency-test"
-E2E_MIN_MS=""
-E2E_MAX_MS=""
-ON_METADATA_MIN_MS=""
-ON_METADATA_MAX_MS=""
-CREATE_TOPIC_MIN_US=""
-CREATE_TOPIC_MAX_US=""
+E2E_MIN_MS="0"
+E2E_MAX_MS="100"
+ON_METADATA_MIN_MS="0"
+ON_METADATA_MAX_MS="100"
+CREATE_TOPIC_MIN_US="0"
+CREATE_TOPIC_MAX_US="800"
 
 usage() {
   cat <<'EOF'
@@ -25,12 +25,16 @@ Options:
   --input-dir <path>    Directory containing topic_create_requests_*.csv
   --input-csv <path>    Input topic_create_requests_*.csv
   --output-dir <path>   Output directory (default: kafka-4.2/figures/create-topic-latency-test)
-  --e2e-min-ms <v>      Y-axis min for e2e_latency.png
-  --e2e-max-ms <v>      Y-axis max for e2e_latency.png
-  --on-metadata-min-ms <v>  Y-axis min for on_metadata_duration.png
-  --on-metadata-max-ms <v>  Y-axis max for on_metadata_duration.png
-  --create-topic-min-us <v> Y-axis min for create_topic_duration.png
-  --create-topic-max-us <v> Y-axis max for create_topic_duration.png
+  --e2e-min-ms <v> Y-axis min for e2e_latency_ms.png (default: 0)
+  --e2e-max-ms <v> Y-axis max for e2e_latency_ms.png (default: 100)
+  --broker-metadata-update-min-ms <v>
+                         Y-axis min for broker_metadata_update_ms.png (default: 0)
+  --broker-metadata-update-max-ms <v>
+                         Y-axis max for broker_metadata_update_ms.png (default: 100)
+  --controller-topic-creation-min-us <v>
+                         Y-axis min for controller_topic_creation_us.png (default: 0)
+  --controller-topic-creation-max-us <v>
+                         Y-axis max for controller_topic_creation_us.png (default: 800)
   --help                Show this help
 EOF
 }
@@ -69,27 +73,19 @@ while [[ $# -gt 0 ]]; do
       E2E_MAX_MS="$2"
       shift 2
       ;;
-    --on-metadata-min-ms)
+    --broker-metadata-update-min-ms)
       ON_METADATA_MIN_MS="$2"
       shift 2
       ;;
-    --on-metadata-max-ms)
+    --broker-metadata-update-max-ms)
       ON_METADATA_MAX_MS="$2"
       shift 2
       ;;
-    --create-topics-min-us)
+    --controller-topic-creation-min-us)
       CREATE_TOPIC_MIN_US="$2"
       shift 2
       ;;
-    --create-topic-min-us)
-      CREATE_TOPIC_MIN_US="$2"
-      shift 2
-      ;;
-    --create-topics-max-us)
-      CREATE_TOPIC_MAX_US="$2"
-      shift 2
-      ;;
-    --create-topic-max-us)
+    --controller-topic-creation-max-us)
       CREATE_TOPIC_MAX_US="$2"
       shift 2
       ;;
@@ -147,24 +143,12 @@ javac -d "$TMP_BUILD_DIR" "$SCRIPT_DIR/TopicCreateLatencyPlot.java"
 
 echo "Generating scatter plots..."
 JAVA_ARGS=(--output-dir "$OUTPUT_DIR")
-if [[ -n "$E2E_MIN_MS" ]]; then
-  JAVA_ARGS+=(--e2e-min-ms "$E2E_MIN_MS")
-fi
-if [[ -n "$E2E_MAX_MS" ]]; then
-  JAVA_ARGS+=(--e2e-max-ms "$E2E_MAX_MS")
-fi
-if [[ -n "$ON_METADATA_MIN_MS" ]]; then
-  JAVA_ARGS+=(--on-metadata-min-ms "$ON_METADATA_MIN_MS")
-fi
-if [[ -n "$ON_METADATA_MAX_MS" ]]; then
-  JAVA_ARGS+=(--on-metadata-max-ms "$ON_METADATA_MAX_MS")
-fi
-if [[ -n "$CREATE_TOPIC_MIN_US" ]]; then
-  JAVA_ARGS+=(--create-topic-min-us "$CREATE_TOPIC_MIN_US")
-fi
-if [[ -n "$CREATE_TOPIC_MAX_US" ]]; then
-  JAVA_ARGS+=(--create-topic-max-us "$CREATE_TOPIC_MAX_US")
-fi
+JAVA_ARGS+=(--e2e-min-ms "$E2E_MIN_MS")
+JAVA_ARGS+=(--e2e-max-ms "$E2E_MAX_MS")
+JAVA_ARGS+=(--broker-metadata-update-min-ms "$ON_METADATA_MIN_MS")
+JAVA_ARGS+=(--broker-metadata-update-max-ms "$ON_METADATA_MAX_MS")
+JAVA_ARGS+=(--controller-topic-creation-min-us "$CREATE_TOPIC_MIN_US")
+JAVA_ARGS+=(--controller-topic-creation-max-us "$CREATE_TOPIC_MAX_US")
 
 if [[ -n "$INPUT_CSV" ]]; then
   JAVA_ARGS+=(--input-csv "$INPUT_CSV")

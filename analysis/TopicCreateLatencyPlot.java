@@ -48,12 +48,12 @@ public class TopicCreateLatencyPlot {
         String inputDirArg = "kafka-4.2/output/topic_create_latency";
         String inputCsvArg = "";
         String outputDirArg = "kafka-4.2/figures/create-topic-latency-test";
-        Double e2eMinMs = null;
-        Double e2eMaxMs = null;
-        Double onMetadataMinMs = null;
-        Double onMetadataMaxMs = null;
-        Double createTopicMinUs = null;
-        Double createTopicMaxUs = null;
+        Double e2eMinMs = 0.0;
+        Double e2eMaxMs = 100.0;
+        Double onMetadataMinMs = 0.0;
+        Double onMetadataMaxMs = 100.0;
+        Double createTopicMinUs = 0.0;
+        Double createTopicMaxUs = 800.0;
 
         for (int i = 0; i < args.length; i++) {
             String arg = args[i];
@@ -67,20 +67,20 @@ public class TopicCreateLatencyPlot {
                 e2eMinMs = Double.parseDouble(args[++i]);
             } else if ("--e2e-max-ms".equals(arg) && i + 1 < args.length) {
                 e2eMaxMs = Double.parseDouble(args[++i]);
-            } else if ("--on-metadata-min-ms".equals(arg) && i + 1 < args.length) {
+            } else if ("--broker-metadata-update-min-ms".equals(arg) && i + 1 < args.length) {
                 onMetadataMinMs = Double.parseDouble(args[++i]);
-            } else if ("--on-metadata-max-ms".equals(arg) && i + 1 < args.length) {
+            } else if ("--broker-metadata-update-max-ms".equals(arg) && i + 1 < args.length) {
                 onMetadataMaxMs = Double.parseDouble(args[++i]);
-            } else if (("--create-topic-min-us".equals(arg) || "--create-topics-min-us".equals(arg)) && i + 1 < args.length) {
+            } else if ("--controller-topic-creation-min-us".equals(arg) && i + 1 < args.length) {
                 createTopicMinUs = Double.parseDouble(args[++i]);
-            } else if (("--create-topic-max-us".equals(arg) || "--create-topics-max-us".equals(arg)) && i + 1 < args.length) {
+            } else if ("--controller-topic-creation-max-us".equals(arg) && i + 1 < args.length) {
                 createTopicMaxUs = Double.parseDouble(args[++i]);
             } else if ("--help".equals(arg) || "-h".equals(arg)) {
                 System.out.println(
                         "Usage: java TopicCreateLatencyPlot [--input-dir <path>] [--input-csv <path>] [--output-dir <path>]\n" +
                         "       [--e2e-min-ms <v>] [--e2e-max-ms <v>]\n" +
-                        "       [--on-metadata-min-ms <v>] [--on-metadata-max-ms <v>]\n" +
-                        "       [--create-topic-min-us <v>] [--create-topic-max-us <v>]");
+                        "       [--broker-metadata-update-min-ms <v>] [--broker-metadata-update-max-ms <v>]\n" +
+                        "       [--controller-topic-creation-min-us <v>] [--controller-topic-creation-max-us <v>]");
                 return;
             } else {
                 throw new IllegalArgumentException("Unknown argument: " + arg);
@@ -106,40 +106,11 @@ public class TopicCreateLatencyPlot {
             throw new IllegalStateException("No usable rows found.");
         }
 
-        // If both metric-specific y-axis options are omitted, align e2e/onMetadata to the same y-scale.
-        if (e2eMinMs == null && e2eMaxMs == null && onMetadataMinMs == null && onMetadataMaxMs == null) {
-            double min = Double.POSITIVE_INFINITY;
-            double max = Double.NEGATIVE_INFINITY;
-            for (Row row : rows) {
-                if (row.e2eMs != null) {
-                    min = Math.min(min, row.e2eMs);
-                    max = Math.max(max, row.e2eMs);
-                }
-                if (row.onMetadataMs != null) {
-                    min = Math.min(min, row.onMetadataMs);
-                    max = Math.max(max, row.onMetadataMs);
-                }
-            }
-            if (Double.isFinite(min) && Double.isFinite(max)) {
-                if (Math.abs(max - min) < 1e-12) {
-                    max = min + 1.0;
-                } else {
-                    double pad = (max - min) * 0.06;
-                    min -= pad;
-                    max += pad;
-                }
-                e2eMinMs = min;
-                e2eMaxMs = max;
-                onMetadataMinMs = min;
-                onMetadataMaxMs = max;
-            }
-        }
-
         drawScatter(
                 toPoints(rows, "e2e"),
                 "Topic Create E2E Latency",
                 "E2E Latency (ms)",
-                outputDir.resolve("e2e_latency.png"),
+                outputDir.resolve("e2e_latency_ms.png"),
                 new Color(47, 111, 223),
                 e2eMinMs,
                 e2eMaxMs);
@@ -147,7 +118,7 @@ public class TopicCreateLatencyPlot {
                 toPoints(rows, "onMeta"),
                 "Broker onMetadataUpdate Duration",
                 "Broker Metadata Update Processing Time (ms)",
-                outputDir.resolve("on_metadata_duration.png"),
+                outputDir.resolve("broker_metadata_update_ms.png"),
                 new Color(15, 157, 88),
                 onMetadataMinMs,
                 onMetadataMaxMs);
@@ -155,7 +126,7 @@ public class TopicCreateLatencyPlot {
                 toPoints(rows, "createTopic"),
                 "Controller Topic Creation Processing Time",
                 "Controller Topic Creation Processing Time (us)",
-                outputDir.resolve("create_topic_duration.png"),
+                outputDir.resolve("controller_topic_creation_us.png"),
                 new Color(209, 122, 0),
                 createTopicMinUs,
                 createTopicMaxUs);
@@ -202,10 +173,6 @@ public class TopicCreateLatencyPlot {
             int e2eIdx = indexOf(headers, "e2e_latency_us");
             int onMetaIdx = indexOf(headers, "on_metadata_duration_us");
             int createIdx = indexOf(headers, "create_topic_duration_us");
-            if (createIdx < 0) {
-                // Backward compatibility for older CSV headers.
-                createIdx = indexOf(headers, "create_topics_duration_us");
-            }
 
             if (seqIdx < 0 || e2eIdx < 0 || onMetaIdx < 0 || createIdx < 0) {
                 throw new IllegalStateException("Required columns missing in CSV: " + csvPath);
