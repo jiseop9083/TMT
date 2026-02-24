@@ -137,9 +137,47 @@ capture_controller_run_log() {
   fi
 }
 
+collect_recent_create_topics_values_ns() {
+  local out_file=$1
+  local all_values_file
+  all_values_file="$(mktemp)"
+  : > "$all_values_file"
+
+  local controller_glob="${CONTROLLER_LOG_PATH}*"
+  local controller_files=()
+  while IFS= read -r f; do
+    controller_files+=("$f")
+  done < <(ls -1tr $controller_glob 2>/dev/null || true)
+
+  if [[ ${#controller_files[@]} -eq 0 ]]; then
+    : > "$out_file"
+    rm -f "$all_values_file"
+    return
+  fi
+
+  awk '
+    /TOPIC_CREATE_METRIC metric=createTopics / {
+      for (i = 1; i <= NF; i++) {
+        if ($i ~ /^duration_ns=/) {
+          print substr($i, 13)
+          break
+        }
+      }
+    }
+  ' "${controller_files[@]}" > "$all_values_file"
+
+  if [[ -s "$all_values_file" ]]; then
+    tail -n "$NUM_TOPICS" "$all_values_file" > "$out_file" || true
+  else
+    : > "$out_file"
+  fi
+
+  rm -f "$all_values_file"
+}
+
 enrich_request_results_with_metrics() {
   local broker_log_path="${BROKER_LOG:-}"
-  local controller_log_source="${CONTROLLER_RUN_LOG:-$CONTROLLER_LOG_PATH}"
+  local controller_log_source="${CONTROLLER_LOG_PATH}*"
   local temp_dir
   temp_dir="$(mktemp -d)"
 
@@ -178,9 +216,7 @@ enrich_request_results_with_metrics() {
     :
   fi
 
-  if [[ -f "$controller_log_source" ]]; then
-    extract_metric_values "$controller_log_source" "TOPIC_CREATE_METRIC metric=createTopics " "duration_ns" "$create_topics_values_ns_file"
-  fi
+  collect_recent_create_topics_values_ns "$create_topics_values_ns_file"
 
   if [[ -s "$e2e_pairs_ns_file" ]]; then
     awk -F, '{printf "%s,%.0f\n", $1, $2 / 1000}' "$e2e_pairs_ns_file" > "$e2e_pairs_file"
@@ -228,7 +264,7 @@ generate_experiment_summary() {
   local run_ts=$1
   local summary_csv="$OUTPUT_DIR/experiment_summary_${run_ts}.csv"
   local broker_log_path="${BROKER_LOG:-}"
-  local controller_log_source="${CONTROLLER_RUN_LOG:-$CONTROLLER_LOG_PATH}"
+  local controller_log_source="${CONTROLLER_LOG_PATH}*"
   local temp_dir
   temp_dir="$(mktemp -d)"
 
@@ -251,9 +287,7 @@ generate_experiment_summary() {
     : > "$create_topics_values_ns_file"
   fi
 
-  if [[ -f "$controller_log_source" ]]; then
-    extract_metric_values "$controller_log_source" "TOPIC_CREATE_METRIC metric=createTopics " "duration_ns" "$create_topics_values_ns_file"
-  fi
+  collect_recent_create_topics_values_ns "$create_topics_values_ns_file"
 
   convert_ns_file_to_us_file "$e2e_values_ns_file" "$e2e_values_file"
   convert_ns_file_to_us_file "$on_metadata_values_ns_file" "$on_metadata_values_file"

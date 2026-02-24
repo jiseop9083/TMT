@@ -90,6 +90,7 @@ grep "TOPIC_CREATE_METRIC" /tmp/kafka-broker.log
   - `forwardToController` 시작부터 broker metadata 반영 완료까지 E2E
 - `metric=createTopics`
   - `ReplicationControlManager.createTopics` 실행 시간
+  - 집계 시 `logs/controller.log*`(rotate 포함) 전체에서 읽고, 마지막 `NUM_TOPICS`개를 사용
 
 ## 5. 자주 발생하는 문제
 
@@ -126,3 +127,45 @@ bin/kafka-server-stop.sh
 ```bash
 pkill -f kafka.Kafka
 ```
+
+## 7. 그래프 생성 (Java)
+
+토픽 생성 실험 CSV(`topic_create_requests_*.csv`)를 통합해서 아래 3개 그래프를 생성합니다.
+
+- `e2e_latency.png`
+- `on_metadata_duration.png`
+- `create_topics_duration.png`
+
+기본 실행:
+
+```bash
+analysis/run_create_topic_latency_plot_pipeline.sh
+```
+
+기본 입력/출력:
+
+- 입력 디렉토리: `kafka-4.2/output/topic_create_latency`
+- 출력 디렉토리: `kafka-4.2/figures/create-topic-latency-test`
+
+특정 CSV 하나만 그리려면:
+
+```bash
+analysis/run_create_topic_latency_plot_pipeline.sh \
+  --input-csv kafka-4.2/output/topic_create_latency/topic_create_requests_20260223_215534.csv
+```
+
+Y축 범위 제한 예시:
+
+```bash
+analysis/run_create_topic_latency_plot_pipeline.sh \
+  --input-dir kafka-4.2/output/topic_create_latency \
+  --e2e-min-ms 20 --e2e-max-ms 80 \
+  --on-metadata-min-ms 8 --on-metadata-max-ms 30 \
+  --create-topics-min-us 90 --create-topics-max-us 300
+```
+
+참고:
+
+- 기본 통합 모드는 입력 디렉토리 내 모든 `topic_create_requests_*.csv`를 합쳐서 그립니다.
+- `e2e_latency_us`, `on_metadata_duration_us`는 그래프에서 `ms`로 변환해 표시합니다.
+- `create_topics_duration_us`는 `us` 단위 그대로 표시합니다.
