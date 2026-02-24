@@ -294,7 +294,7 @@ public class TopicCreateLatencyPlot {
         g.drawString(title, left, 40);
 
         g.setFont(new Font("SansSerif", Font.PLAIN, 16));
-        g.drawString("Topic Sequence (seq)", left + plotW / 2 - 80, height - 24);
+        g.drawString("Number of topic", left + plotW / 2 - 80, height - 24);
         g.drawString(yLabel, 14, top + plotH / 2);
 
         g.setFont(new Font("SansSerif", Font.PLAIN, 14));
