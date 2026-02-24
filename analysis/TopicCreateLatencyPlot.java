@@ -171,8 +171,14 @@ public class TopicCreateLatencyPlot {
             int seqIdx = indexOf(headers, "seq");
             int statusIdx = indexOf(headers, "status");
             int e2eIdx = indexOf(headers, "e2e_latency_us");
-            int onMetaIdx = indexOf(headers, "on_metadata_duration_us");
-            int createIdx = indexOf(headers, "create_topic_duration_us");
+            int onMetaIdx = indexOf(headers, "broker_metadata_update_us");
+            if (onMetaIdx < 0) {
+                onMetaIdx = indexOf(headers, "on_metadata_duration_us");
+            }
+            int createIdx = indexOf(headers, "controller_topic_creation_us");
+            if (createIdx < 0) {
+                createIdx = indexOf(headers, "create_topic_duration_us");
+            }
 
             if (seqIdx < 0 || e2eIdx < 0 || onMetaIdx < 0 || createIdx < 0) {
                 throw new IllegalStateException("Required columns missing in CSV: " + csvPath);
