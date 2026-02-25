@@ -45,11 +45,12 @@ FIRST_TOPIC_PREFIX="test_topic_"
 ACKS="1"
 
 RESOURCE_SAMPLE_INTERVAL_SEC=2
+NUM_RUNS=3                      # number of repeated experiment runs
 
 # ============================================================
 # Internal state
 # ============================================================
-TIMESTAMP="$(date '+%Y%m%d_%H%M%S')"
+TIMESTAMP=""   # set per run
 OUTPUT_DIR="$KAFKA_HOME/output"
 LOG_BROKER_DIR="$OUTPUT_DIR/logs/broker"
 LOG_PRODUCER_DIR="$OUTPUT_DIR/logs/producer"
@@ -421,61 +422,65 @@ log "Building JAR artifacts (:core :clients :tools) ..."
 "$KAFKA_HOME/gradlew" -p "$KAFKA_HOME" :core:jar :clients:jar :tools:jar --no-daemon -q
 log "Build complete."
 
-# 1. Fresh broker
-stop_kafka
-clean_logs
-format_storage
-start_kafka
+declare -a RUN_TIMESTAMPS=()
 
-# 2. Setup load infrastructure
-create_load_topics
-start_resource_sampler "$BROKER_PID" "$OUTPUT_DIR/yammer_${TIMESTAMP}.csv"
-start_load_producers
+for run in $(seq 1 "$NUM_RUNS"); do
+  TIMESTAMP="$(date '+%Y%m%d_%H%M%S')"
+  RUN_TIMESTAMPS+=("$TIMESTAMP")
 
-# 3. Measurement producer
-PRODUCER_CSV="$OUTPUT_DIR/producer_metrics_${TIMESTAMP}.csv"
-log "Starting measurement producer (${FIRST_NUM_TOPICS} topics, ${FIRST_RECORD_SIZE}B each) ..."
-"$KAFKA_HOME/bin/kafka-producer-latency.sh" \
-  --bootstrap-server "$BOOTSTRAP_SERVER" \
-  --num-topics      "$FIRST_NUM_TOPICS" \
-  --topic-prefix    "$FIRST_TOPIC_PREFIX" \
-  --record-size     "$FIRST_RECORD_SIZE" \
-  --acks            "$ACKS" \
-  --output          "$PRODUCER_CSV" \
-  2>&1 | tee "$LOG_PRODUCER_DIR/measurement_producer_${TIMESTAMP}.log"
-log "Measurement producer finished."
+  log "============================================================"
+  log "  RUN $run / $NUM_RUNS  [$TIMESTAMP]"
+  log "============================================================"
 
-# 4. Stop load + sampler
-stop_resource_sampler
-stop_load_producers
+  # 1. Fresh broker
+  stop_kafka
+  clean_logs
+  format_storage
+  start_kafka
 
-# 5. Parse + merge
-parse_and_merge \
-  "$BROKER_LOG" \
-  "$PRODUCER_CSV" \
-  "$OUTPUT_DIR/combined_metrics_${TIMESTAMP}.csv" \
-  "$OUTPUT_DIR/broker_proc_metrics_${TIMESTAMP}.csv" \
-  "$OUTPUT_DIR/broker_meta_update_metrics_${TIMESTAMP}.csv" \
-  "$OUTPUT_DIR/metadata_req_metrics_${TIMESTAMP}.csv"
+  # 2. Setup load infrastructure
+  create_load_topics
+  start_resource_sampler "$BROKER_PID" "$OUTPUT_DIR/yammer_${TIMESTAMP}.csv"
+  start_load_producers
 
-stop_kafka
+  # 3. Measurement producer
+  PRODUCER_CSV="$OUTPUT_DIR/producer_metrics_${TIMESTAMP}.csv"
+  log "Starting measurement producer (${FIRST_NUM_TOPICS} topics, ${FIRST_RECORD_SIZE}B each) ..."
+  "$KAFKA_HOME/bin/kafka-producer-latency.sh" \
+    --bootstrap-server "$BOOTSTRAP_SERVER" \
+    --num-topics      "$FIRST_NUM_TOPICS" \
+    --topic-prefix    "$FIRST_TOPIC_PREFIX" \
+    --record-size     "$FIRST_RECORD_SIZE" \
+    --acks            "$ACKS" \
+    --output          "$PRODUCER_CSV" \
+    2>&1 | tee "$LOG_PRODUCER_DIR/measurement_producer_${TIMESTAMP}.log"
+  log "Measurement producer finished."
+
+  # 4. Stop load + sampler
+  stop_resource_sampler
+  stop_load_producers
+
+  # 5. Parse + merge
+  parse_and_merge \
+    "$BROKER_LOG" \
+    "$PRODUCER_CSV" \
+    "$OUTPUT_DIR/combined_metrics_${TIMESTAMP}.csv" \
+    "$OUTPUT_DIR/broker_proc_metrics_${TIMESTAMP}.csv" \
+    "$OUTPUT_DIR/broker_meta_update_metrics_${TIMESTAMP}.csv" \
+    "$OUTPUT_DIR/metadata_req_metrics_${TIMESTAMP}.csv"
+
+  stop_kafka
+  log "Run $run complete → combined_metrics_${TIMESTAMP}.csv"
+done
+
 trap - EXIT
 
-cat <<SUMMARY
-
-============================================================
-  Experiment complete!  [$TIMESTAMP]
-  ┌───────────────────────────────────────────────────────────────┐
-  │ Location                    File                              │
-  ├───────────────────────────────────────────────────────────────┤
-  │ output/                     producer_metrics_$TIMESTAMP.csv   │
-  │ output/                     broker_proc_metrics_$TIMESTAMP.csv│
-  │ output/                     broker_meta_update_$TIMESTAMP.csv │
-  │ output/                     combined_metrics_$TIMESTAMP.csv   │
-  │ output/                     yammer_$TIMESTAMP.csv             │
-  │ output/logs/broker/         broker_$TIMESTAMP.log             │
-  │ output/logs/producer/       measurement_producer_$TIMESTAMP.log│
-  │ output/logs/producer/       load_producer_*_$TIMESTAMP.log   │
-  └───────────────────────────────────────────────────────────────┘
-============================================================
-SUMMARY
+echo ""
+echo "============================================================"
+echo "  All ${NUM_RUNS} run(s) complete!"
+echo "  Output dir: $OUTPUT_DIR"
+echo "  Results:"
+for ts in "${RUN_TIMESTAMPS[@]}"; do
+  echo "    combined_metrics_${ts}.csv"
+done
+echo "============================================================"
