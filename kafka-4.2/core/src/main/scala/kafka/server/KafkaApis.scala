@@ -387,6 +387,7 @@ class KafkaApis(val requestChannel: RequestChannel,
    */
   def handleProduceRequest(request: RequestChannel.Request, requestLocal: RequestLocal): Unit = {
     val tmtStartNs = System.nanoTime() // [TMT] broker produce processing time start
+    val tmtQueueWaitMs = (request.requestDequeueTimeNanos - request.startTimeNanos) / 1000000.0
     val produceRequest = request.body[ProduceRequest]
     // [TMT] extract topic names early, before clearPartitionRecords() is called later
     // For ProduceRequest v13+, topic.name() is empty; resolve from topicId via metadataCache
@@ -436,9 +437,10 @@ class KafkaApis(val requestChannel: RequestChannel,
       val memoryRecords = partition.records.asInstanceOf[MemoryRecords]
       if (!authorizedTopics.contains(topicIdPartition.topic))
         unauthorizedTopicResponses += topicIdPartition -> new PartitionResponse(Errors.TOPIC_AUTHORIZATION_FAILED)
-      else if (!metadataCache.contains(topicIdPartition.topicPartition))
+      else if (!metadataCache.contains(topicIdPartition.topicPartition)) {
+        TopicCreateTimingTracker.markCreateStart(topicIdPartition.topic, tmtStartNs)
         nonExistingTopicResponses += topicIdPartition -> new PartitionResponse(Errors.UNKNOWN_TOPIC_OR_PARTITION)
-      else
+      } else
         try {
           ProduceRequest.validateRecords(request.header.apiVersion, memoryRecords)
           authorizedRequestInfo += (topicIdPartition -> memoryRecords)
@@ -525,6 +527,10 @@ class KafkaApis(val requestChannel: RequestChannel,
       } else {
         requestChannel.sendResponse(request, new ProduceResponse(mergedResponseStatus.asJava, maxThrottleTimeMs, nodeEndpoints.values.toList.asJava), None)
       }
+
+      // [TMT] log broker produce processing time at produce-response callback timing.
+      val tmtElapsedMs = (System.nanoTime() - tmtStartNs) / 1000000.0
+      info(f"[TMT-BROKER-PROC] topics=$tmtTopics queue_wait_ms=$tmtQueueWaitMs%.6f elapsed_ms=$tmtElapsedMs%.6f")
     }
 
     def processingStatsCallback(processingStats: ProduceResponseStats): Unit = {
@@ -554,10 +560,6 @@ class KafkaApis(val requestChannel: RequestChannel,
       // hence we clear its data here in order to let GC reclaim its memory since it is already appended to log
       produceRequest.clearPartitionRecords()
     }
-    // [TMT] log broker produce processing time
-    val tmtElapsedMs = (System.nanoTime() - tmtStartNs) / 1000000.0
-    val tmtQueueWaitMs = (request.requestDequeueTimeNanos - request.startTimeNanos) / 1000000.0
-    info(f"[TMT-BROKER-PROC] topics=$tmtTopics queue_wait_ms=$tmtQueueWaitMs%.6f elapsed_ms=$tmtElapsedMs%.6f")
   }
 
   /**
@@ -854,6 +856,8 @@ class KafkaApis(val requestChannel: RequestChannel,
     } else {
       val nonExistingTopics = topics.diff(topicResponses.asScala.map(_.name).toSet)
       val nonExistingTopicResponses = if (allowAutoTopicCreation) {
+        val tmtCreateStartNs = System.nanoTime()
+        nonExistingTopics.foreach(topic => TopicCreateTimingTracker.markCreateStart(topic, tmtCreateStartNs))
         val controllerMutationQuota = quotas.controllerMutation.newPermissiveQuotaFor(request.session, request.header.clientId())
         autoTopicCreationManager.createTopics(nonExistingTopics, controllerMutationQuota, Some(request.context))
       } else {

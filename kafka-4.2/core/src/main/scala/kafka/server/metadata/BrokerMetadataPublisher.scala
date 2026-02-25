@@ -21,7 +21,7 @@ import java.util.OptionalInt
 import kafka.coordinator.transaction.TransactionCoordinator
 import kafka.log.LogManager
 import kafka.server.share.SharePartitionManager
-import kafka.server.{KafkaConfig, ReplicaManager}
+import kafka.server.{KafkaConfig, ReplicaManager, TopicCreateTimingTracker}
 import kafka.utils.Logging
 import org.apache.kafka.common.TopicPartition
 import org.apache.kafka.common.errors.TimeoutException
@@ -286,6 +286,15 @@ class BrokerMetadataPublisher(
         }
         .getOrElse("")
       info(f"[TMT-META-UPDATE] new_topics=$tmtNewTopics offset=${highestOffsetAndEpoch.offset} elapsed_ms=$tmtElapsedMs%.6f")
+
+      if (tmtNewTopics.nonEmpty) {
+        tmtNewTopics.split(",").iterator.map(_.trim).filter(_.nonEmpty).foreach { topic =>
+          TopicCreateTimingTracker.pollCreateStart(topic).foreach { startNs =>
+            val tmtTopicCreateElapsedMs = (System.nanoTime() - startNs) / 1000000.0
+            info(f"[TMT-TOPIC-CREATE-PROC] topic=$topic offset=${highestOffsetAndEpoch.offset} elapsed_ms=$tmtTopicCreateElapsedMs%.6f")
+          }
+        }
+      }
       _firstPublish = false
       firstPublishFuture.complete(null)
     }

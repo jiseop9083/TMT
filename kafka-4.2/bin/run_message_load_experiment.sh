@@ -10,12 +10,14 @@
 #   producer_metrics.csv          topic_num, topic_name, e2e_ms, wait_on_metadata_count
 #   broker_proc_metrics.csv       per [TMT-BROKER-PROC] log entry
 #   broker_meta_update_metrics.csv per [TMT-META-UPDATE] log entry
+#   broker_topic_create_proc_metrics.csv per [TMT-TOPIC-CREATE-PROC] log entry
 #   combined_metrics.csv          all metrics merged per-topic (primary result)
 #   yammer.csv                    timestamp,epoch_ms,broker_pid,open_fd_count,...
 #
 # Instrumentation required (already patched in this repo):
 #   KafkaApis.scala               → logs [TMT-BROKER-PROC] on every handleProduceRequest
 #   BrokerMetadataPublisher.scala → logs [TMT-META-UPDATE] on every onMetadataUpdate
+#   BrokerMetadataPublisher.scala → logs [TMT-TOPIC-CREATE-PROC] from produce start to metadata apply end
 #   KafkaProducer.java            → exposes TMT_WAIT_ON_METADATA_COUNT ThreadLocal
 #   ProducerLatency.java          → writes e2e_ms + wait_on_metadata_count to CSV
 
@@ -47,11 +49,107 @@ ACKS="1"
 RESOURCE_SAMPLE_INTERVAL_SEC=2
 NUM_RUNS=3                      # number of repeated experiment runs
 
+usage() {
+  cat <<EOF
+Usage: $(basename "$0") [options]
+
+Options:
+  -p, --load-producer-count N    Number of background load producers (default: $LOAD_PRODUCER_COUNT)
+  -i, --load-interval-sec SEC    Send interval per load producer in seconds (default: $LOAD_INTERVAL_SEC)
+  -r, --num-runs N               Number of repeated experiment runs (default: $NUM_RUNS)
+  --num-topics N                 Number of measurement topics (default: $FIRST_NUM_TOPICS)
+  --topic-prefix PREFIX          Measurement topic prefix (default: $FIRST_TOPIC_PREFIX)
+  --record-size BYTES            Measurement record size in bytes (default: $FIRST_RECORD_SIZE)
+  --acks VALUE                   Producer acks for measurement/load producers (default: $ACKS)
+  -h, --help                     Show this help message
+EOF
+}
+
+parse_args() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -p|--load-producer-count)
+        [[ $# -lt 2 ]] && { echo "ERROR: missing value for $1" >&2; usage; exit 1; }
+        LOAD_PRODUCER_COUNT="$2"
+        shift 2
+        ;;
+      -i|--load-interval-sec)
+        [[ $# -lt 2 ]] && { echo "ERROR: missing value for $1" >&2; usage; exit 1; }
+        LOAD_INTERVAL_SEC="$2"
+        shift 2
+        ;;
+      -r|--num-runs)
+        [[ $# -lt 2 ]] && { echo "ERROR: missing value for $1" >&2; usage; exit 1; }
+        NUM_RUNS="$2"
+        shift 2
+        ;;
+      --num-topics)
+        [[ $# -lt 2 ]] && { echo "ERROR: missing value for $1" >&2; usage; exit 1; }
+        FIRST_NUM_TOPICS="$2"
+        shift 2
+        ;;
+      --topic-prefix)
+        [[ $# -lt 2 ]] && { echo "ERROR: missing value for $1" >&2; usage; exit 1; }
+        FIRST_TOPIC_PREFIX="$2"
+        shift 2
+        ;;
+      --record-size)
+        [[ $# -lt 2 ]] && { echo "ERROR: missing value for $1" >&2; usage; exit 1; }
+        FIRST_RECORD_SIZE="$2"
+        shift 2
+        ;;
+      --acks)
+        [[ $# -lt 2 ]] && { echo "ERROR: missing value for $1" >&2; usage; exit 1; }
+        ACKS="$2"
+        shift 2
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      *)
+        echo "ERROR: unknown option: $1" >&2
+        usage
+        exit 1
+        ;;
+    esac
+  done
+
+  [[ "$LOAD_PRODUCER_COUNT" =~ ^[0-9]+$ ]] || {
+    echo "ERROR: --load-producer-count must be a non-negative integer (got: $LOAD_PRODUCER_COUNT)" >&2
+    exit 1
+  }
+  [[ "$LOAD_INTERVAL_SEC" =~ ^[0-9]+([.][0-9]+)?$ ]] || {
+    echo "ERROR: --load-interval-sec must be a positive number (got: $LOAD_INTERVAL_SEC)" >&2
+    exit 1
+  }
+  awk -v interval="$LOAD_INTERVAL_SEC" 'BEGIN { exit (interval > 0 ? 0 : 1) }' || {
+    echo "ERROR: --load-interval-sec must be greater than 0 (got: $LOAD_INTERVAL_SEC)" >&2
+    exit 1
+  }
+  [[ "$FIRST_NUM_TOPICS" =~ ^[0-9]+$ ]] || {
+    echo "ERROR: --num-topics must be a non-negative integer (got: $FIRST_NUM_TOPICS)" >&2
+    exit 1
+  }
+  [[ "$NUM_RUNS" =~ ^[0-9]+$ ]] || {
+    echo "ERROR: --num-runs must be a non-negative integer (got: $NUM_RUNS)" >&2
+    exit 1
+  }
+  [[ "$FIRST_RECORD_SIZE" =~ ^[0-9]+$ ]] || {
+    echo "ERROR: --record-size must be a non-negative integer (got: $FIRST_RECORD_SIZE)" >&2
+    exit 1
+  }
+  [[ -n "$FIRST_TOPIC_PREFIX" ]] || {
+    echo "ERROR: --topic-prefix must not be empty" >&2
+    exit 1
+  }
+}
+
 # ============================================================
 # Internal state
 # ============================================================
 TIMESTAMP=""   # set per run
-OUTPUT_DIR="$KAFKA_HOME/output"
+OUTPUT_DIR="$KAFKA_HOME/output/first-produce-with-message-load"
 LOG_BROKER_DIR="$OUTPUT_DIR/logs/broker"
 LOG_PRODUCER_DIR="$OUTPUT_DIR/logs/producer"
 
@@ -63,7 +161,36 @@ declare -a LOAD_PIDS=()
 mkdir -p "$OUTPUT_DIR" "$LOG_BROKER_DIR" "$LOG_PRODUCER_DIR"
 
 log()      { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
-epoch_ms() { date '+%s%3N' 2>/dev/null || date '+%s000'; }
+epoch_ms() {
+  local secs ns
+  secs="$(date '+%s')"
+  ns="$(date '+%N' 2>/dev/null || true)"
+  if [[ "$ns" =~ ^[0-9]{9}$ ]]; then
+    printf '%s%03d\n' "$secs" "$((10#$ns / 1000000))"
+  else
+    printf '%s000\n' "$secs"
+  fi
+}
+
+cpu_time_to_sec() {
+  awk -v t="$1" '
+    BEGIN {
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", t)
+      days = 0
+      if (index(t, "-") > 0) {
+        split(t, d, "-")
+        days = d[1] + 0
+        t = d[2]
+      }
+      n = split(t, a, ":")
+      h = 0; m = 0; s = 0
+      if (n == 3)      { h = a[1] + 0; m = a[2] + 0; s = a[3] + 0 }
+      else if (n == 2) { h = 0;        m = a[1] + 0; s = a[2] + 0 }
+      else if (n == 1) { h = 0;        m = 0;        s = a[1] + 0 }
+      printf "%.6f", (days * 86400) + (h * 3600) + (m * 60) + s
+    }
+  '
+}
 
 wait_for_port() {
   local host="$1" port="$2" max_wait="$3" waited=0
@@ -133,29 +260,29 @@ create_load_topics() {
 # ============================================================
 start_load_producers() {
   LOAD_PIDS=()
+  local load_throughput
+  load_throughput="$(awk -v interval="$LOAD_INTERVAL_SEC" 'BEGIN { printf "%.0f", 1/interval }')"
+  [[ "$load_throughput" -lt 1 ]] && load_throughput=1
 
   for i in $(seq 1 "$LOAD_PRODUCER_COUNT"); do
     # All load producers send to the same single topic
     local log_file="$LOG_PRODUCER_DIR/load_producer_${i}_${TIMESTAMP}.log"
 
     (
-      while true; do
-        "$KAFKA_HOME/bin/kafka-producer-perf-test.sh" \
-          --topic "$LOAD_TOPIC" \
-          --num-records 1 \
-          --record-size "$LOAD_RECORD_SIZE" \
-          --throughput -1 \
-          --producer-props \
-            bootstrap.servers="$BOOTSTRAP_SERVER" \
-            acks="$ACKS" \
-            max.request.size=2097152 \
-          >>"$log_file" 2>&1 || true
-        sleep "$LOAD_INTERVAL_SEC"
-      done
+      "$KAFKA_HOME/bin/kafka-producer-perf-test.sh" \
+        --topic "$LOAD_TOPIC" \
+        --num-records 1000000000 \
+        --record-size "$LOAD_RECORD_SIZE" \
+        --throughput "$load_throughput" \
+        --producer-props \
+          bootstrap.servers="$BOOTSTRAP_SERVER" \
+          acks="$ACKS" \
+          max.request.size=2097152 \
+        >>"$log_file" 2>&1 || true
     ) &
     local pid=$!
     LOAD_PIDS+=("$pid")
-    log "  Load producer $i → $LOAD_TOPIC (PID=$pid)"
+    log "  Load producer $i → $LOAD_TOPIC (PID=$pid, throughput=${load_throughput} rec/s)"
   done
 
   log "Warming up load for ${LOAD_WARMUP_SEC}s ..."
@@ -192,8 +319,10 @@ start_resource_sampler() {
     >"$out_csv"
 
   (
+    local prev_epoch_ms="" prev_cpu_sec=""
     while kill -0 "$pid" 2>/dev/null; do
       local now epoch_now fd_count cpu_pct rss_kb vsz_kb
+      local cpu_time cpu_sec cpu_pct_ps ps_out delta_ms
       local heap_used_kb heap_committed_kb storage_kb topic_dir_count segment_file_count
 
       now="$(date '+%Y-%m-%d %H:%M:%S')"
@@ -203,8 +332,27 @@ start_resource_sampler() {
       fd_count="$(lsof -p "$pid" 2>/dev/null | tail -n +2 | wc -l | tr -d ' ')" || fd_count=""
 
       # CPU / RSS / VSZ
-      local ps_out; ps_out="$(ps -p "$pid" -o %cpu=,rss=,vsz= 2>/dev/null)" || ps_out=""
-      read -r cpu_pct rss_kb vsz_kb <<<"$ps_out"
+      # CPU is computed from cumulative CPU time deltas between samples.
+      # This reflects short-interval usage better than ps %cpu average.
+      ps_out="$(ps -p "$pid" -o time=,rss=,vsz=,%cpu= 2>/dev/null | awk 'NR==1{print $1,$2,$3,$4}')" || ps_out=""
+      read -r cpu_time rss_kb vsz_kb cpu_pct_ps <<<"$ps_out"
+      cpu_sec="$(cpu_time_to_sec "$cpu_time")"
+      cpu_pct="${cpu_pct_ps:-}"
+
+      if [[ -n "$prev_epoch_ms" && -n "$prev_cpu_sec" && "$epoch_now" =~ ^[0-9]+$ ]]; then
+        delta_ms=$((epoch_now - prev_epoch_ms))
+        cpu_pct="$(awk -v cur="$cpu_sec" -v prev="$prev_cpu_sec" -v dm="$delta_ms" '
+          BEGIN {
+            dc = cur - prev
+            if (dm <= 0 || dc < 0) printf ""
+            else printf "%.1f", (dc * 100000.0) / dm
+          }
+        ')"
+        [[ -n "$cpu_pct" ]] || cpu_pct="${cpu_pct_ps:-}"
+      fi
+
+      prev_epoch_ms="$epoch_now"
+      prev_cpu_sec="$cpu_sec"
 
       # Heap (jstat -gc)
       local gc_out; gc_out="$(jstat -gc "$pid" 2>/dev/null | awk 'NR==2{print $1,$2,$3,$4,$5,$6,$7,$8}')" || gc_out=""
@@ -254,6 +402,7 @@ parse_and_merge() {
   local broker_proc_csv="$4"
   local broker_meta_csv="$5"
   local metadata_req_csv="$6"
+  local topic_create_csv="$7"
 
   log "Parsing broker log: $broker_log"
 
@@ -304,13 +453,29 @@ parse_and_merge() {
   local meta_count; meta_count="$(tail -n +2 "$broker_meta_csv" | wc -l | tr -d ' ')"
   log "  [TMT-META-UPDATE] entries parsed: $meta_count → $broker_meta_csv"
 
+  # ---- broker_topic_create_proc_metrics.csv ----
+  # Log format: ... [TMT-TOPIC-CREATE-PROC] topic=<name> offset=<n> elapsed_ms=<ms> ...
+  printf '%s\n' "topic,offset,broker_topic_create_proc_ms" >"$topic_create_csv"
+  grep '\[TMT-TOPIC-CREATE-PROC\]' "$broker_log" 2>/dev/null \
+    | awk '{
+        topic=""; offset=""; elapsed=""
+        for (i=1; i<=NF; i++) {
+          if ($i ~ /^topic=/)      { sub(/^topic=/,      "", $i); topic=$i }
+          if ($i ~ /^offset=/)     { sub(/^offset=/,     "", $i); offset=$i }
+          if ($i ~ /^elapsed_ms=/) { sub(/^elapsed_ms=/, "", $i); elapsed=$i }
+        }
+        if (topic != "") print topic","offset","elapsed
+      }' >>"$topic_create_csv"
+  local topic_create_count; topic_create_count="$(tail -n +2 "$topic_create_csv" | wc -l | tr -d ' ')"
+  log "  [TMT-TOPIC-CREATE-PROC] entries parsed: $topic_create_count → $topic_create_csv"
+
   # ---- combined_metrics.csv  (Python join) ----
   log "Merging into combined CSV..."
-  python3 - "$producer_csv" "$broker_proc_csv" "$broker_meta_csv" "$metadata_req_csv" "$combined_csv" <<'PYEOF'
+  python3 - "$producer_csv" "$broker_proc_csv" "$broker_meta_csv" "$metadata_req_csv" "$topic_create_csv" "$combined_csv" <<'PYEOF'
 import sys, csv
 from collections import defaultdict
 
-producer_csv, broker_proc_csv, broker_meta_csv, metadata_req_csv, combined_csv = sys.argv[1:]
+producer_csv, broker_proc_csv, broker_meta_csv, metadata_req_csv, topic_create_csv, combined_csv = sys.argv[1:]
 
 # ---- producer data (primary, indexed by topic_name) ----
 producer_rows = {}   # topic_name -> row dict
@@ -358,6 +523,15 @@ with open(broker_meta_csv, newline='') as f:
             if name and name not in broker_meta:
                 broker_meta[name] = elapsed
 
+# ---- topic create processing data ----
+topic_create_proc = {}   # topic_name -> first elapsed_ms found
+with open(topic_create_csv, newline='') as f:
+    for row in csv.DictReader(f):
+        name = row.get('topic', '').strip()
+        elapsed = row.get('broker_topic_create_proc_ms', '').strip()
+        if name and elapsed and name not in topic_create_proc:
+            topic_create_proc[name] = elapsed
+
 # ---- write combined CSV ----
 with open(combined_csv, 'w', newline='') as f:
     writer = csv.writer(f)
@@ -369,6 +543,7 @@ with open(combined_csv, 'w', newline='') as f:
         'broker_proc_time_ms_last',
         'broker_proc_time_ms_all',
         'broker_meta_update_ms',
+        'broker_topic_create_proc_ms',
     ])
     for topic_name, prow in sorted(
         producer_rows.items(),
@@ -384,6 +559,7 @@ with open(combined_csv, 'w', newline='') as f:
             broker_proc_last.get(topic_name, ''),
             '|'.join(broker_proc_all.get(topic_name, [])),
             broker_meta.get(topic_name, ''),
+            topic_create_proc.get(topic_name, ''),
         ])
 
 print(f"Combined CSV: {combined_csv}  ({len(producer_rows)} rows)")
@@ -400,11 +576,13 @@ cleanup_on_exit() {
   stop_load_producers
   stop_kafka
 }
-trap cleanup_on_exit EXIT
 
 # ============================================================
 # Main
 # ============================================================
+parse_args "$@"
+trap cleanup_on_exit EXIT
+
 cat <<BANNER
 ============================================================
   Message Load Experiment
@@ -467,7 +645,8 @@ for run in $(seq 1 "$NUM_RUNS"); do
     "$OUTPUT_DIR/combined_metrics_${TIMESTAMP}.csv" \
     "$OUTPUT_DIR/broker_proc_metrics_${TIMESTAMP}.csv" \
     "$OUTPUT_DIR/broker_meta_update_metrics_${TIMESTAMP}.csv" \
-    "$OUTPUT_DIR/metadata_req_metrics_${TIMESTAMP}.csv"
+    "$OUTPUT_DIR/metadata_req_metrics_${TIMESTAMP}.csv" \
+    "$OUTPUT_DIR/broker_topic_create_proc_metrics_${TIMESTAMP}.csv"
 
   stop_kafka
   log "Run $run complete → combined_metrics_${TIMESTAMP}.csv"
