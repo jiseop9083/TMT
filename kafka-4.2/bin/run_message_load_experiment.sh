@@ -252,23 +252,40 @@ parse_and_merge() {
   local combined_csv="$3"
   local broker_proc_csv="$4"
   local broker_meta_csv="$5"
+  local metadata_req_csv="$6"
 
   log "Parsing broker log: $broker_log"
 
   # ---- broker_proc_metrics.csv ----
-  # Log format: ... [TMT-BROKER-PROC] topics=<name> elapsed_ms=<ms> ...
-  printf '%s\n' "topics,broker_proc_time_ms" >"$broker_proc_csv"
+  # Log format: ... [TMT-BROKER-PROC] topics=<name> queue_wait_ms=<ms> elapsed_ms=<ms> ...
+  printf '%s\n' "topics,produce_queue_wait_ms,broker_proc_time_ms" >"$broker_proc_csv"
   grep '\[TMT-BROKER-PROC\]' "$broker_log" 2>/dev/null \
     | awk '{
-        topics=""; elapsed=""
+        topics=""; queue_wait=""; elapsed=""
         for (i=1; i<=NF; i++) {
-          if ($i ~ /^topics=/)    { sub(/^topics=/,    "", $i); topics=$i }
-          if ($i ~ /^elapsed_ms=/) { sub(/^elapsed_ms=/, "", $i); elapsed=$i }
+          if ($i ~ /^topics=/)         { sub(/^topics=/,         "", $i); topics=$i }
+          if ($i ~ /^queue_wait_ms=/)  { sub(/^queue_wait_ms=/,  "", $i); queue_wait=$i }
+          if ($i ~ /^elapsed_ms=/)     { sub(/^elapsed_ms=/,     "", $i); elapsed=$i }
         }
-        if (topics != "") print topics","elapsed
+        if (topics != "") print topics","queue_wait","elapsed
       }' >>"$broker_proc_csv"
   local proc_count; proc_count="$(tail -n +2 "$broker_proc_csv" | wc -l | tr -d ' ')"
   log "  [TMT-BROKER-PROC] entries parsed: $proc_count → $broker_proc_csv"
+
+  # ---- metadata_req_metrics.csv ----
+  # Log format: ... [TMT-METADATA-REQ] topics=<name> queue_wait_ms=<ms> ...
+  printf '%s\n' "topics,metadata_req_queue_wait_ms" >"$metadata_req_csv"
+  grep '\[TMT-METADATA-REQ\]' "$broker_log" 2>/dev/null \
+    | awk '{
+        topics=""; queue_wait=""
+        for (i=1; i<=NF; i++) {
+          if ($i ~ /^topics=/)        { sub(/^topics=/,        "", $i); topics=$i }
+          if ($i ~ /^queue_wait_ms=/) { sub(/^queue_wait_ms=/, "", $i); queue_wait=$i }
+        }
+        if (topics != "") print topics","queue_wait
+      }' >>"$metadata_req_csv"
+  local meta_req_count; meta_req_count="$(tail -n +2 "$metadata_req_csv" | wc -l | tr -d ' ')"
+  log "  [TMT-METADATA-REQ] entries parsed: $meta_req_count → $metadata_req_csv"
 
   # ---- broker_meta_update_metrics.csv ----
   # Log format: ... [TMT-META-UPDATE] new_topics=<names> offset=<n> elapsed_ms=<ms> ...
@@ -288,11 +305,11 @@ parse_and_merge() {
 
   # ---- combined_metrics.csv  (Python join) ----
   log "Merging into combined CSV..."
-  python3 - "$producer_csv" "$broker_proc_csv" "$broker_meta_csv" "$combined_csv" <<'PYEOF'
+  python3 - "$producer_csv" "$broker_proc_csv" "$broker_meta_csv" "$metadata_req_csv" "$combined_csv" <<'PYEOF'
 import sys, csv
 from collections import defaultdict
 
-producer_csv, broker_proc_csv, broker_meta_csv, combined_csv = sys.argv[1:]
+producer_csv, broker_proc_csv, broker_meta_csv, metadata_req_csv, combined_csv = sys.argv[1:]
 
 # ---- producer data (primary, indexed by topic_name) ----
 producer_rows = {}   # topic_name -> row dict
@@ -301,18 +318,33 @@ with open(producer_csv, newline='') as f:
         producer_rows[row['topic_name']] = row
 
 # ---- broker proc data (multiple entries per topic) ----
-broker_proc_all  = defaultdict(list)  # topic_name -> [ms, ...]
-broker_proc_last = {}                 # topic_name -> last ms (most likely the successful one)
+broker_proc_all       = defaultdict(list)  # topic_name -> [elapsed_ms, ...]
+broker_proc_last      = {}                 # topic_name -> last elapsed_ms
+broker_proc_queue_last = {}               # topic_name -> last produce_queue_wait_ms
 with open(broker_proc_csv, newline='') as f:
     for row in csv.DictReader(f):
         t = row.get('topics', '').strip()
         v = row.get('broker_proc_time_ms', '').strip()
+        q = row.get('produce_queue_wait_ms', '').strip()
         if t and v:
             broker_proc_all[t].append(v)
             broker_proc_last[t] = v
+            broker_proc_queue_last[t] = q
+
+# ---- metadata request queue wait (first request per topic) ----
+metadata_req_queue = {}   # topic_name -> first metadata_req_queue_wait_ms
+with open(metadata_req_csv, newline='') as f:
+    for row in csv.DictReader(f):
+        names_field = row.get('topics', '').strip()
+        q           = row.get('metadata_req_queue_wait_ms', '').strip()
+        if not names_field or not q:
+            continue
+        for name in names_field.split(','):
+            name = name.strip()
+            if name and name not in metadata_req_queue:
+                metadata_req_queue[name] = q
 
 # ---- broker meta update data ----
-# new_topics field may be comma-separated when multiple topics created in one batch
 broker_meta = {}   # topic_name -> first elapsed_ms found
 with open(broker_meta_csv, newline='') as f:
     for row in csv.DictReader(f):
@@ -331,6 +363,8 @@ with open(combined_csv, 'w', newline='') as f:
     writer.writerow([
         'topic_num', 'topic_name',
         'e2e_ms', 'wait_on_metadata_count',
+        'metadata_req_queue_wait_ms',
+        'produce_queue_wait_ms',
         'broker_proc_time_ms_last',
         'broker_proc_time_ms_all',
         'broker_meta_update_ms',
@@ -344,6 +378,8 @@ with open(combined_csv, 'w', newline='') as f:
             topic_name,
             prow.get('e2e_ms', ''),
             prow.get('wait_on_metadata_count', ''),
+            metadata_req_queue.get(topic_name, ''),
+            broker_proc_queue_last.get(topic_name, ''),
             broker_proc_last.get(topic_name, ''),
             '|'.join(broker_proc_all.get(topic_name, [])),
             broker_meta.get(topic_name, ''),
@@ -419,7 +455,8 @@ parse_and_merge \
   "$PRODUCER_CSV" \
   "$OUTPUT_DIR/combined_metrics_${TIMESTAMP}.csv" \
   "$OUTPUT_DIR/broker_proc_metrics_${TIMESTAMP}.csv" \
-  "$OUTPUT_DIR/broker_meta_update_metrics_${TIMESTAMP}.csv"
+  "$OUTPUT_DIR/broker_meta_update_metrics_${TIMESTAMP}.csv" \
+  "$OUTPUT_DIR/metadata_req_metrics_${TIMESTAMP}.csv"
 
 stop_kafka
 trap - EXIT

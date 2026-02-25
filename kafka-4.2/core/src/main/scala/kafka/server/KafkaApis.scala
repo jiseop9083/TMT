@@ -556,7 +556,8 @@ class KafkaApis(val requestChannel: RequestChannel,
     }
     // [TMT] log broker produce processing time
     val tmtElapsedMs = (System.nanoTime() - tmtStartNs) / 1000000.0
-    info(f"[TMT-BROKER-PROC] topics=$tmtTopics elapsed_ms=$tmtElapsedMs%.6f")
+    val tmtQueueWaitMs = (request.requestDequeueTimeNanos - request.startTimeNanos) / 1000000.0
+    info(f"[TMT-BROKER-PROC] topics=$tmtTopics queue_wait_ms=$tmtQueueWaitMs%.6f elapsed_ms=$tmtElapsedMs%.6f")
   }
 
   /**
@@ -882,6 +883,16 @@ class KafkaApis(val requestChannel: RequestChannel,
   def handleTopicMetadataRequest(request: RequestChannel.Request): Unit = {
     val metadataRequest = request.body[MetadataRequest]
     val requestVersion = request.header.apiVersion
+    // [TMT] log metadata request queue time (for new topic discovery by producer)
+    val tmtMetaQueueWaitMs = (request.requestDequeueTimeNanos - request.startTimeNanos) / 1000000.0
+    val tmtMetaTopics = if (metadataRequest.isAllTopics) ""
+      else metadataRequest.data.topics.asScala
+        .map(t => if (t.name != null && t.name.nonEmpty) t.name
+                  else metadataCache.getTopicName(t.topicId).orElse(""))
+        .filter(_.nonEmpty)
+        .mkString(",")
+    if (tmtMetaTopics.nonEmpty)
+      info(f"[TMT-METADATA-REQ] topics=$tmtMetaTopics queue_wait_ms=$tmtMetaQueueWaitMs%.6f")
 
     // Topic IDs are not supported for versions 10 and 11. Topic names can not be null in these versions.
     if (!metadataRequest.isAllTopics) {
