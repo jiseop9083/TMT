@@ -152,7 +152,7 @@ public class ProducerLatencyMultiSend {
                 }
 
                 // Wait for broker to set up log directories and elect leader
-                Thread.sleep(500);
+                Thread.sleep(300);
 
                 // Step 2: Send numSends produce requests, each with a new producer
                 for (int j = 1; j <= numSends; j++) {

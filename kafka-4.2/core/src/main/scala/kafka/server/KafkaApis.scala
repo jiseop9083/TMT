@@ -386,6 +386,7 @@ class KafkaApis(val requestChannel: RequestChannel,
    * Handle a produce request
    */
   def handleProduceRequest(request: RequestChannel.Request, requestLocal: RequestLocal): Unit = {
+    val produceStartTimeNanos = System.nanoTime()
     val produceRequest = request.body[ProduceRequest]
 
     if (RequestUtils.hasTransactionalRecords(produceRequest)) {
@@ -447,6 +448,11 @@ class KafkaApis(val requestChannel: RequestChannel,
     // https://issues.apache.org/jira/browse/KAFKA-10730
     @nowarn("cat=deprecation")
     def sendResponseCallback(responseStatus: Map[TopicIdPartition, PartitionResponse]): Unit = {
+      val produceElapsedMs = (System.nanoTime() - produceStartTimeNanos) / 1000000.0
+      val topicPartitions = responseStatus.keys.map(tp => s"${tp.topic}-${tp.partition}").mkString(",")
+      info(s"[ProduceRequest] correlationId=${request.header.correlationId} clientId=${request.header.clientId} " +
+        s"partitions=[$topicPartitions] e2e=${produceElapsedMs}ms")
+
       val mergedResponseStatus = responseStatus ++ unauthorizedTopicResponses ++ nonExistingTopicResponses ++ invalidRequestResponses
       var errorInResponse = false
 
