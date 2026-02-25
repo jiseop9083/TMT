@@ -19,6 +19,8 @@ ON_METADATA_MIN_MS="0"
 ON_METADATA_MAX_MS="100"
 CREATE_TOPIC_MIN_US="0"
 CREATE_TOPIC_MAX_US="800"
+TOPIC_MIN=""
+TOPIC_MAX=""
 
 usage() {
   cat <<'EOF'
@@ -36,6 +38,8 @@ Options:
   --broker-metadata-update-max-ms <v>
   --controller-topic-creation-min-us <v>
   --controller-topic-creation-max-us <v>
+  --topic-min <n>      Minimum topic index (x-axis lower bound)
+  --topic-max <n>      Maximum topic index (x-axis upper bound)
   --help                Show this help
 EOF
 }
@@ -62,6 +66,10 @@ while [[ $# -gt 0 ]]; do
       CREATE_TOPIC_MIN_US="$2"; shift 2 ;;
     --controller-topic-creation-max-us)
       CREATE_TOPIC_MAX_US="$2"; shift 2 ;;
+    --topic-min)
+      TOPIC_MIN="$2"; shift 2 ;;
+    --topic-max)
+      TOPIC_MAX="$2"; shift 2 ;;
     --help|-h)
       usage
       exit 0 ;;
@@ -144,6 +152,12 @@ JAVA_ARGS+=(--broker-metadata-update-min-ms "$ON_METADATA_MIN_MS")
 JAVA_ARGS+=(--broker-metadata-update-max-ms "$ON_METADATA_MAX_MS")
 JAVA_ARGS+=(--controller-topic-creation-min-us "$CREATE_TOPIC_MIN_US")
 JAVA_ARGS+=(--controller-topic-creation-max-us "$CREATE_TOPIC_MAX_US")
+if [[ -n "$TOPIC_MIN" ]]; then
+  JAVA_ARGS+=(--topic-min "$TOPIC_MIN")
+fi
+if [[ -n "$TOPIC_MAX" ]]; then
+  JAVA_ARGS+=(--topic-max "$TOPIC_MAX")
+fi
 
 if [[ -n "$INPUT_CSV" ]]; then
   JAVA_ARGS+=(--input-csv "$INPUT_CSV")

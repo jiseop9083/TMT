@@ -54,6 +54,8 @@ public class TopicCreateLatencyPlot {
         Double onMetadataMaxMs = 100.0;
         Double createTopicMinUs = 0.0;
         Double createTopicMaxUs = 800.0;
+        Integer topicMin = null;
+        Integer topicMax = null;
 
         for (int i = 0; i < args.length; i++) {
             String arg = args[i];
@@ -75,9 +77,14 @@ public class TopicCreateLatencyPlot {
                 createTopicMinUs = Double.parseDouble(args[++i]);
             } else if ("--controller-topic-creation-max-us".equals(arg) && i + 1 < args.length) {
                 createTopicMaxUs = Double.parseDouble(args[++i]);
+            } else if ("--topic-min".equals(arg) && i + 1 < args.length) {
+                topicMin = Integer.parseInt(args[++i]);
+            } else if ("--topic-max".equals(arg) && i + 1 < args.length) {
+                topicMax = Integer.parseInt(args[++i]);
             } else if ("--help".equals(arg) || "-h".equals(arg)) {
                 System.out.println(
                         "Usage: java TopicCreateLatencyPlot [--input-dir <path>] [--input-csv <path>] [--output-dir <path>]\n" +
+                        "       [--topic-min <n>] [--topic-max <n>]\n" +
                         "       [--e2e-min-ms <v>] [--e2e-max-ms <v>]\n" +
                         "       [--broker-metadata-update-min-ms <v>] [--broker-metadata-update-max-ms <v>]\n" +
                         "       [--controller-topic-creation-min-us <v>] [--controller-topic-creation-max-us <v>]");
@@ -85,6 +92,10 @@ public class TopicCreateLatencyPlot {
             } else {
                 throw new IllegalArgumentException("Unknown argument: " + arg);
             }
+        }
+
+        if (topicMin != null && topicMax != null && topicMax < topicMin) {
+            throw new IllegalArgumentException("topic-max must be greater than or equal to topic-min");
         }
 
         Path outputDir = Paths.get(outputDirArg);
@@ -106,8 +117,13 @@ public class TopicCreateLatencyPlot {
             throw new IllegalStateException("No usable rows found.");
         }
 
+        List<Row> filteredRows = filterByTopicRange(rows, topicMin, topicMax);
+        if (filteredRows.isEmpty()) {
+            throw new IllegalStateException("No rows remain after applying topic range filter.");
+        }
+
         drawScatter(
-                toPoints(rows, "e2e"),
+                toPoints(filteredRows, "e2e"),
                 "Topic Create E2E Latency",
                 "E2E Latency (ms)",
                 outputDir.resolve("e2e_latency_ms.png"),
@@ -115,7 +131,7 @@ public class TopicCreateLatencyPlot {
                 e2eMinMs,
                 e2eMaxMs);
         drawScatter(
-                toPoints(rows, "onMeta"),
+                toPoints(filteredRows, "onMeta"),
                 "Broker onMetadataUpdate Duration",
                 "Broker Metadata Update Processing Time (ms)",
                 outputDir.resolve("broker_metadata_update_ms.png"),
@@ -123,7 +139,7 @@ public class TopicCreateLatencyPlot {
                 onMetadataMinMs,
                 onMetadataMaxMs);
         drawScatter(
-                toPoints(rows, "createTopic"),
+                toPoints(filteredRows, "createTopic"),
                 "Controller Topic Creation Processing Time",
                 "Controller Topic Creation Processing Time (us)",
                 outputDir.resolve("controller_topic_creation_us.png"),
@@ -223,6 +239,23 @@ public class TopicCreateLatencyPlot {
             points.add(new Point(row.globalSeq, v));
         }
         return points;
+    }
+
+    static List<Row> filterByTopicRange(List<Row> rows, Integer topicMin, Integer topicMax) {
+        if (topicMin == null && topicMax == null) {
+            return rows;
+        }
+        List<Row> filtered = new ArrayList<>();
+        for (Row row : rows) {
+            if (topicMin != null && row.globalSeq < topicMin) {
+                continue;
+            }
+            if (topicMax != null && row.globalSeq > topicMax) {
+                continue;
+            }
+            filtered.add(row);
+        }
+        return filtered;
     }
 
     static void drawScatter(List<Point> points, String title, String yLabel, Path outPath, Color pointColor,
