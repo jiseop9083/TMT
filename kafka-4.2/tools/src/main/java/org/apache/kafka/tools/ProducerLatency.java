@@ -61,7 +61,7 @@ public class ProducerLatency {
     static void execute(String[] args) throws Exception {
         // Parse arguments
         String bootstrapServer = getArg(args, "--bootstrap-server", null);
-        int numTopics = Integer.parseInt(getArg(args, "--num-topics", "3000"));
+        int numTopics = Integer.parseInt(getArg(args, "--num-topics", "100"));
         String topicPrefix = getArg(args, "--topic-prefix", "test_topic_");
         int recordSize = Integer.parseInt(getArg(args, "--record-size", "10485000"));
         String acks = getArg(args, "--acks", "1");
@@ -90,8 +90,13 @@ public class ProducerLatency {
         props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.ByteArraySerializer");
         props.put(ProducerConfig.ACKS_CONFIG, acks);
         props.put(ProducerConfig.LINGER_MS_CONFIG, "0");
-        props.put(ProducerConfig.BATCH_SIZE_CONFIG, "1"); // Disable batching for accurate latency
         props.put(ProducerConfig.MAX_REQUEST_SIZE_CONFIG, "11534336"); // ~11MB to accommodate 10MB payloads + overhead
+        // Strictly serialize all requests: one request in-flight at a time.
+        // Prevents IllegalStateException("There are no in-flight requests for node N")
+        // that occurs when MetadataResponse and disconnection race in the sender I/O thread.
+        props.put(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION, "1");
+        // Always fetch fresh metadata for each new producer instance.
+        props.put(ProducerConfig.METADATA_MAX_AGE_CONFIG, "100");
 
         // Generate random payload
         Random random = new Random();
@@ -114,33 +119,50 @@ public class ProducerLatency {
 
         try (PrintWriter writer = new PrintWriter(new FileWriter(outputFile))) {
             // CSV header
-            writer.println("topic_num,topic_name,latency_ms");
+            writer.println("topic_num,topic_name,e2e_ms,wait_on_metadata_count");
 
             // Create new producer for each topic (includes full metadata fetch each time)
             for (int i = 1; i <= numTopics; i++) {
                 String topicName = topicPrefix + i;
 
-                try (KafkaProducer<byte[], byte[]> producer = new KafkaProducer<>(props)) {
-                    long start = System.nanoTime();
-                    producer.send(new ProducerRecord<>(topicName, payload)).get();
-                    long elapsed = System.nanoTime() - start;
+                // Retry up to 3 times with a fresh producer on failure (e.g. sender thread race)
+                boolean success = false;
+                int maxRetries = 3;
+                for (int attempt = 1; attempt <= maxRetries && !success; attempt++) {
+                    try (KafkaProducer<byte[], byte[]> producer = new KafkaProducer<>(props)) {
+                        long start = System.nanoTime();
+                        producer.send(new ProducerRecord<>(topicName, payload)).get();
+                        long elapsed = System.nanoTime() - start;
 
-                    double latencyMs = elapsed / 1_000_000.0;
-                    latencies[i - 1] = elapsed / 1_000_000;
-                    totalTime += elapsed;
+                        double latencyMs = elapsed / 1_000_000.0;
+                        latencies[i - 1] = elapsed / 1_000_000;
+                        totalTime += elapsed;
 
-                    // Write to CSV
-                    writer.printf("%d,%s,%.4f%n", i, topicName, latencyMs);
-                    writer.flush();
+                        // [TMT] read waitOnMetadata loop count from ThreadLocal
+                        int waitOnMetadataCount = KafkaProducer.TMT_WAIT_ON_METADATA_COUNT.get();
 
-                    // Print progress
-                    if (i % 100 == 0 || i == 1 || i == numTopics) {
-                        System.out.printf("[%d/%d] %s: %.2f ms%n", i, numTopics, topicName, latencyMs);
+                        // Write to CSV
+                        writer.printf("%d,%s,%.6f,%d%n", i, topicName, latencyMs, waitOnMetadataCount);
+                        writer.flush();
+
+                        // Print progress
+                        if (i % 100 == 0 || i == 1 || i == numTopics) {
+                            System.out.printf("[%d/%d] %s: %.2f ms (wait_meta_count=%d)%n",
+                                i, numTopics, topicName, latencyMs, waitOnMetadataCount);
+                        }
+                        success = true;
+                    } catch (Exception e) {
+                        if (attempt < maxRetries) {
+                            System.err.printf("[%d/%d] %s: attempt %d failed (%s), retrying...%n",
+                                i, numTopics, topicName, attempt, e.getMessage());
+                            Thread.sleep(200);
+                        } else {
+                            System.err.printf("[%d/%d] %s: ERROR after %d attempts - %s%n",
+                                i, numTopics, topicName, maxRetries, e.getMessage());
+                            writer.printf("%d,%s,ERROR,ERROR%n", i, topicName);
+                            writer.flush();
+                        }
                     }
-                } catch (Exception e) {
-                    System.err.printf("[%d/%d] %s: ERROR - %s%n", i, numTopics, topicName, e.getMessage());
-                    writer.printf("%d,%s,ERROR%n", i, topicName);
-                    writer.flush();
                 }
             }
         }
@@ -197,6 +219,6 @@ public class ProducerLatency {
         System.out.println("  kafka-producer-latency.sh --bootstrap-server localhost:9092 --num-topics 3000");
         System.out.println();
         System.out.println("Output CSV format:");
-        System.out.println("  topic_num,topic_name,latency_ms");
+        System.out.println("  topic_num,topic_name,e2e_ms,wait_on_metadata_count");
     }
 }

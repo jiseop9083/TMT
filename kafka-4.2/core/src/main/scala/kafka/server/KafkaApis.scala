@@ -386,7 +386,14 @@ class KafkaApis(val requestChannel: RequestChannel,
    * Handle a produce request
    */
   def handleProduceRequest(request: RequestChannel.Request, requestLocal: RequestLocal): Unit = {
+    val tmtStartNs = System.nanoTime() // [TMT] broker produce processing time start
     val produceRequest = request.body[ProduceRequest]
+    // [TMT] extract topic names early, before clearPartitionRecords() is called later
+    // For ProduceRequest v13+, topic.name() is empty; resolve from topicId via metadataCache
+    val tmtTopics = produceRequest.data.topicData.asScala.map { topic =>
+      if (topic.topicId().equals(Uuid.ZERO_UUID)) topic.name()
+      else metadataCache.getTopicName(topic.topicId()).orElse(topic.name())
+    }.mkString(",")
 
     if (RequestUtils.hasTransactionalRecords(produceRequest)) {
       val isAuthorizedTransactional = produceRequest.transactionalId != null &&
@@ -547,6 +554,9 @@ class KafkaApis(val requestChannel: RequestChannel,
       // hence we clear its data here in order to let GC reclaim its memory since it is already appended to log
       produceRequest.clearPartitionRecords()
     }
+    // [TMT] log broker produce processing time
+    val tmtElapsedMs = (System.nanoTime() - tmtStartNs) / 1000000.0
+    info(f"[TMT-BROKER-PROC] topics=$tmtTopics elapsed_ms=$tmtElapsedMs%.6f")
   }
 
   /**

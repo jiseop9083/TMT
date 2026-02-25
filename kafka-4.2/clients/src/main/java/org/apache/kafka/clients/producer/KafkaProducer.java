@@ -245,6 +245,9 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
     public static final String NETWORK_THREAD_PREFIX = "kafka-producer-network-thread";
     public static final String PRODUCER_METRIC_GROUP_NAME = "producer-metrics";
 
+    /** [TMT] Tracks the number of do-while iterations in the last waitOnMetadata call (per-thread). */
+    public static final ThreadLocal<Integer> TMT_WAIT_ON_METADATA_COUNT = ThreadLocal.withInitial(() -> 0);
+
     private final String clientId;
     // Visible for testing
     final Metrics metrics;
@@ -1109,8 +1112,10 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
         Integer partitionsCount = cluster.partitionCountForTopic(topic);
         // Return cached metadata if we have it, and if the record's partition is either undefined
         // or within the known partition range
-        if (partitionsCount != null && (partition == null || partition < partitionsCount))
+        if (partitionsCount != null && (partition == null || partition < partitionsCount)) {
+            TMT_WAIT_ON_METADATA_COUNT.set(0); // [TMT] cached hit, no loop needed
             return new ClusterAndWaitTime(cluster, 0);
+        }
 
         long remainingWaitMs = maxWaitMs;
         long elapsed = 0;
@@ -1118,7 +1123,9 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
         // or until maxWaitTimeMs is exceeded. This is necessary in case the metadata
         // is stale and the number of partitions for this topic has increased in the meantime.
         long nowNanos = time.nanoseconds();
+        int tmtLoopCount = 0; // [TMT] count waitOnMetadata loop iterations
         do {
+            tmtLoopCount++; // [TMT] increment loop counter
             if (partition != null) {
                 log.trace("Requesting metadata update for partition {} of topic {}.", partition, topic);
             } else {
@@ -1151,6 +1158,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             partitionsCount = cluster.partitionCountForTopic(topic);
         } while (partitionsCount == null || (partition != null && partition >= partitionsCount));
 
+        TMT_WAIT_ON_METADATA_COUNT.set(tmtLoopCount); // [TMT] store loop count for caller
         producerMetrics.recordMetadataWait(time.nanoseconds() - nowNanos);
 
         return new ClusterAndWaitTime(cluster, elapsed);

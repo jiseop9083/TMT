@@ -116,6 +116,7 @@ class BrokerMetadataPublisher(
     newImage: MetadataImage,
     manifest: LoaderManifest
   ): Unit = {
+    val tmtStartNs = System.nanoTime() // [TMT] metadata update processing time start
     val highestOffsetAndEpoch = newImage.highestOffsetAndEpoch()
 
     val deltaName = if (_firstPublish) {
@@ -273,6 +274,18 @@ class BrokerMetadataPublisher(
       case t: Throwable => metadataPublishingFaultHandler.handleFault("Uncaught exception while " +
         s"publishing broker metadata from $deltaName", t)
     } finally {
+      // [TMT] log metadata update processing time
+      val tmtElapsedMs = (System.nanoTime() - tmtStartNs) / 1000000.0
+      val tmtNewTopics = Option(delta.topicsDelta())
+        .map { td =>
+          val oldImage = td.image()
+          td.changedTopics().asScala.values
+            .filter(topicDelta => oldImage.getTopic(topicDelta.id()) == null)
+            .map(_.name())
+            .mkString(",")
+        }
+        .getOrElse("")
+      info(f"[TMT-META-UPDATE] new_topics=$tmtNewTopics offset=${highestOffsetAndEpoch.offset} elapsed_ms=$tmtElapsedMs%.6f")
       _firstPublish = false
       firstPublishFuture.complete(null)
     }
