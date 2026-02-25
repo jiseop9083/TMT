@@ -29,7 +29,7 @@ BOOTSTRAP_SERVER="localhost:9092"
 # ============================================================
 # Experiment configuration — edit these as needed
 # ============================================================
-LOAD_PRODUCER_COUNT=2           # N: number of background load producers
+LOAD_PRODUCER_COUNT=20           # N: number of background load producers
 LOAD_INTERVAL_SEC=0.3           # seconds between sends per load producer
 LOAD_RECORD_SIZE=1048576        # 1 MB per load message
 # All N load producers send to a single topic (1 partition, 1 replica)
@@ -40,7 +40,7 @@ LOAD_WARMUP_SEC=10              # warm-up before measurement starts
 #       Ensure server.properties has: num.partitions=1
 
 FIRST_RECORD_SIZE=1048576       # 1 MB per measurement message
-FIRST_NUM_TOPICS=100           # test_topic_1 .. test_topic_N
+FIRST_NUM_TOPICS=3000           # test_topic_1 .. test_topic_N
 FIRST_TOPIC_PREFIX="test_topic_"
 ACKS="1"
 

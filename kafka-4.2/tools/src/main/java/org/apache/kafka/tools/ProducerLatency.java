@@ -61,7 +61,7 @@ public class ProducerLatency {
     static void execute(String[] args) throws Exception {
         // Parse arguments
         String bootstrapServer = getArg(args, "--bootstrap-server", null);
-        int numTopics = Integer.parseInt(getArg(args, "--num-topics", "100"));
+        int numTopics = Integer.parseInt(getArg(args, "--num-topics", "3000"));
         String topicPrefix = getArg(args, "--topic-prefix", "test_topic_");
         int recordSize = Integer.parseInt(getArg(args, "--record-size", "10485000"));
         String acks = getArg(args, "--acks", "1");
