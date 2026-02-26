@@ -196,5 +196,6 @@ fi
 if [[ -n "$SCATTER_Y_MAX" ]]; then
   JAVA_ARGS+=(--scatter-y-max "$SCATTER_Y_MAX")
 fi
+JAVA_ARGS+=(--monochrome)
 
 java -cp "$TMP_BUILD_DIR" FirstProduceWithMessageLoadPlot "${JAVA_ARGS[@]}"

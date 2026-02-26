@@ -29,6 +29,7 @@ public class FirstProduceWithMessageLoadPlot {
             "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
             "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf"
     };
+    private static boolean MONOCHROME = false;
 
     private static class Series {
         final String label;
@@ -84,11 +85,13 @@ public class FirstProduceWithMessageLoadPlot {
                 scatterYMinOverride = Double.parseDouble(args[++i]);
             } else if ("--scatter-y-max".equals(arg) && i + 1 < args.length) {
                 scatterYMaxOverride = Double.parseDouble(args[++i]);
+            } else if ("--monochrome".equals(arg)) {
+                MONOCHROME = true;
             } else if ("--help".equals(arg) || "-h".equals(arg)) {
                 System.out.println(
                         "Usage: java FirstProduceWithMessageLoadPlot [--out-dir <dir>]\n"
                         + "       [--fig-dir <dir>] [--timestamp <YYYYMMDD_HHMMSS>] [--all]\n"
-                        + "       [--scatter-y-min <value>] [--scatter-y-max <value>]\n"
+                        + "       [--scatter-y-min <value>] [--scatter-y-max <value>] [--monochrome]\n"
                         + "Default: merge all timestamps into one figure per metric group.");
                 return;
             } else {
@@ -521,16 +524,7 @@ public class FirstProduceWithMessageLoadPlot {
             }
         }
 
-        int lx = right - 220;
-        int ly = top + 6;
-        g.setFont(new Font("SansSerif", Font.PLAIN, 11));
-        for (Series s : panel.series) {
-            g.setColor(s.color);
-            g.fillRect(lx, ly - 8, 12, 8);
-            g.setColor(hex("#111827"));
-            g.drawString(s.label, lx + 16, ly);
-            ly += 15;
-        }
+        // legend intentionally hidden for cleaner monochrome output
     }
 
     private static int map(double v, double minV, double maxV, int minP, int maxP) {
@@ -622,6 +616,9 @@ public class FirstProduceWithMessageLoadPlot {
     }
 
     private static Color colorFor(String metric, int tsIndex) {
+        if (MONOCHROME) {
+            return hex("#1f77b4");
+        }
         int base = Math.floorMod(metric.hashCode(), PALETTE.length);
         int idx = Math.floorMod(base + tsIndex * 3, PALETTE.length);
         return hex(PALETTE[idx]);
