@@ -67,6 +67,8 @@ public class FirstProduceWithMessageLoadPlot {
         String figDirArg = "";
         String timestampArg = "";
         boolean all = false;
+        Double scatterYMinOverride = null;
+        Double scatterYMaxOverride = null;
 
         for (int i = 0; i < args.length; i++) {
             String arg = args[i];
@@ -78,10 +80,15 @@ public class FirstProduceWithMessageLoadPlot {
                 timestampArg = args[++i];
             } else if ("--all".equals(arg)) {
                 all = true;
+            } else if ("--scatter-y-min".equals(arg) && i + 1 < args.length) {
+                scatterYMinOverride = Double.parseDouble(args[++i]);
+            } else if ("--scatter-y-max".equals(arg) && i + 1 < args.length) {
+                scatterYMaxOverride = Double.parseDouble(args[++i]);
             } else if ("--help".equals(arg) || "-h".equals(arg)) {
                 System.out.println(
                         "Usage: java FirstProduceWithMessageLoadPlot [--out-dir <dir>]\n"
                         + "       [--fig-dir <dir>] [--timestamp <YYYYMMDD_HHMMSS>] [--all]\n"
+                        + "       [--scatter-y-min <value>] [--scatter-y-max <value>]\n"
                         + "Default: merge all timestamps into one figure per metric group.");
                 return;
             } else {
@@ -115,7 +122,8 @@ public class FirstProduceWithMessageLoadPlot {
             yammerRowsByTs.put(ts, yammerRows);
         }
 
-        List<Path> combinedOutputs = drawCombinedFigures(combinedRowsByTs, timestamps, figDir);
+        List<Path> combinedOutputs = drawCombinedFigures(
+                combinedRowsByTs, timestamps, figDir, scatterYMinOverride, scatterYMaxOverride);
         List<Path> yammerOutputs = drawYammerFigures(yammerRowsByTs, timestamps, figDir);
 
         System.out.println("timestamps merged: " + String.join(", ", timestamps));
@@ -196,7 +204,9 @@ public class FirstProduceWithMessageLoadPlot {
 
     private static List<Path> drawCombinedFigures(Map<String, List<Map<String, Double>>> rowsByTs,
                                                   List<String> timestamps,
-                                                  Path figDir) throws IOException {
+                                                  Path figDir,
+                                                  Double scatterYMinOverride,
+                                                  Double scatterYMaxOverride) throws IOException {
         List<Series> e2eSeries = new ArrayList<>();
         List<Series> queueSeries = new ArrayList<>();
         List<Series> brokerProcSeries = new ArrayList<>();
@@ -243,27 +253,34 @@ public class FirstProduceWithMessageLoadPlot {
         Panel p5 = new Panel("Broker Topic Create", "Topic Count", "broker_topic_create_proc_ms", brokerTopicCreateSeries);
         Panel p6 = new Panel("Broker Gap (Create - Meta)", "Topic Count", "gap_ms", brokerGapSeries);
 
+        double e2eMax = maxSeriesY(e2eSeries);
+        double scatterYMin = scatterYMinOverride != null ? scatterYMinOverride : 0.0;
+        double scatterYMax = scatterYMaxOverride != null ? scatterYMaxOverride : e2eMax;
+        if (!Double.isFinite(scatterYMax) || scatterYMax <= scatterYMin) {
+            scatterYMax = scatterYMin + 1.0;
+        }
+
         Path out1 = figDir.resolve("e2e.png");
         Path out2 = figDir.resolve("queue_wait.png");
         Path out3 = figDir.resolve("broker_proc_last.png");
         Path out4 = figDir.resolve("broker_meta_update_latency.png");
         Path out5 = figDir.resolve("broker_topic_create_latency.png");
         Path out6 = figDir.resolve("broker_gap_ms.png");
-        drawSinglePanelFigure(p1, out1);
-        drawSinglePanelFigure(p2, out2);
-        drawSinglePanelFigure(p3, out3);
-        drawSinglePanelFigure(p4, out4);
-        drawSinglePanelFigure(p5, out5);
-        drawSinglePanelFigure(p6, out6);
+        drawSinglePanelFigure(p1, out1, scatterYMin, scatterYMax);
+        drawSinglePanelFigure(p2, out2, scatterYMin, scatterYMax);
+        drawSinglePanelFigure(p3, out3, scatterYMin, scatterYMax);
+        drawSinglePanelFigure(p4, out4, scatterYMin, scatterYMax);
+        drawSinglePanelFigure(p5, out5, scatterYMin, scatterYMax);
+        drawSinglePanelFigure(p6, out6, scatterYMin, scatterYMax);
         return List.of(out1, out2, out3, out4, out5, out6);
     }
 
     private static List<Path> drawYammerFigures(Map<String, List<Map<String, Double>>> rowsByTs,
                                                 List<String> timestamps,
                                                 Path figDir) throws IOException {
-        List<Series> cpuSeries = new ArrayList<>();
-        List<Series> memorySeries = new ArrayList<>();
-        List<Series> diskSeries = new ArrayList<>();
+        Path resourceDir = figDir.resolve("resource");
+        Files.createDirectories(resourceDir);
+        List<Path> outputs = new ArrayList<>();
 
         for (int i = 0; i < timestamps.size(); i++) {
             String ts = timestamps.get(i);
@@ -276,31 +293,42 @@ public class FirstProduceWithMessageLoadPlot {
                 continue;
             }
 
-            cpuSeries.add(new Series("cpu_pct (" + shortTs(ts) + ")", x, col(rows, "cpu_pct"),
-                    colorFor("cpu_pct", i), PlotType.LINE));
-            memorySeries.add(new Series("rss_kb (" + shortTs(ts) + ")", x, col(rows, "rss_kb"),
-                    colorFor("rss_kb", i), PlotType.LINE));
-            memorySeries.add(new Series("heap_used_kb (" + shortTs(ts) + ")", x, col(rows, "heap_used_kb"),
-                    colorFor("heap_used_kb", i), PlotType.LINE));
-            diskSeries.add(new Series("storage_kb (" + shortTs(ts) + ")", x, col(rows, "storage_kb"),
-                    colorFor("storage_kb", i), PlotType.LINE));
+            Panel cpuPanel = new Panel(
+                    "CPU Usage (" + ts + ")",
+                    "Topic Count (topic_dir_count)",
+                    "cpu_pct",
+                    List.of(new Series("cpu_pct", x, col(rows, "cpu_pct"), colorFor("cpu_pct", i), PlotType.LINE)));
+
+            Panel memoryPanel = new Panel(
+                    "Memory (" + ts + ")",
+                    "Topic Count (topic_dir_count)",
+                    "KB",
+                    List.of(
+                            new Series("rss_kb", x, col(rows, "rss_kb"), colorFor("rss_kb", i), PlotType.LINE),
+                            new Series("heap_used_kb", x, col(rows, "heap_used_kb"), colorFor("heap_used_kb", i), PlotType.LINE)
+                    ));
+
+            Panel diskPanel = new Panel(
+                    "Disk Usage (" + ts + ")",
+                    "Topic Count (topic_dir_count)",
+                    "storage_kb",
+                    List.of(new Series("storage_kb", x, col(rows, "storage_kb"), colorFor("storage_kb", i), PlotType.LINE)));
+
+            Path cpuOut = resourceDir.resolve("cpu_" + ts + ".png");
+            Path memoryOut = resourceDir.resolve("memory_" + ts + ".png");
+            Path diskOut = resourceDir.resolve("disk_" + ts + ".png");
+            drawSinglePanelFigure(cpuPanel, cpuOut, null, null);
+            drawSinglePanelFigure(memoryPanel, memoryOut, null, null);
+            drawSinglePanelFigure(diskPanel, diskOut, null, null);
+            outputs.add(cpuOut);
+            outputs.add(memoryOut);
+            outputs.add(diskOut);
         }
 
-        if (cpuSeries.isEmpty()) {
+        if (outputs.isEmpty()) {
             throw new IllegalStateException("No numeric data for yammer topic_dir_count");
         }
-
-        Panel cpuPanel = new Panel("CPU Usage", "Topic Count (topic_dir_count)", "cpu_pct", cpuSeries);
-        Panel memoryPanel = new Panel("Memory", "Topic Count (topic_dir_count)", "KB", memorySeries);
-        Panel diskPanel = new Panel("Disk Usage", "Topic Count (topic_dir_count)", "storage_kb", diskSeries);
-
-        Path cpuOut = figDir.resolve("cpu.png");
-        Path memoryOut = figDir.resolve("memory.png");
-        Path diskOut = figDir.resolve("disk.png");
-        drawSinglePanelFigure(cpuPanel, cpuOut);
-        drawSinglePanelFigure(memoryPanel, memoryOut);
-        drawSinglePanelFigure(diskPanel, diskOut);
-        return List.of(cpuOut, memoryOut, diskOut);
+        return outputs;
     }
 
     private static void draw2x2Figure(List<Panel> panels, Path outPath, boolean blankLast) throws IOException {
@@ -330,14 +358,15 @@ public class FirstProduceWithMessageLoadPlot {
                 g.drawRect(x, y, cellW, cellH);
                 continue;
             }
-            drawPanel(g, panels.get(i), x, y, cellW, cellH);
+            drawPanel(g, panels.get(i), x, y, cellW, cellH, null, null);
         }
 
         g.dispose();
         ImageIO.write(img, "png", outPath.toFile());
     }
 
-    private static void drawSinglePanelFigure(Panel panel, Path outPath) throws IOException {
+    private static void drawSinglePanelFigure(Panel panel, Path outPath, Double forceYMin, Double forceYMax)
+            throws IOException {
         int width = 1100;
         int height = 700;
         BufferedImage img = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
@@ -345,12 +374,13 @@ public class FirstProduceWithMessageLoadPlot {
         g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
         g.setColor(Color.WHITE);
         g.fillRect(0, 0, width, height);
-        drawPanel(g, panel, 20, 20, width - 40, height - 40);
+        drawPanel(g, panel, 20, 20, width - 40, height - 40, forceYMin, forceYMax);
         g.dispose();
         ImageIO.write(img, "png", outPath.toFile());
     }
 
-    private static void drawPanel(Graphics2D g, Panel panel, int x, int y, int w, int h) {
+    private static void drawPanel(Graphics2D g, Panel panel, int x, int y, int w, int h,
+                                  Double forceYMin, Double forceYMax) {
         g.setColor(hex("#ffffff"));
         g.fillRect(x, y, w, h);
         g.setColor(hex("#e5e7eb"));
@@ -402,9 +432,20 @@ public class FirstProduceWithMessageLoadPlot {
             maxY = minY + 1.0;
         }
 
-        double yPad = Math.max((maxY - minY) * 0.08, 1e-6);
-        minY -= yPad;
-        maxY += yPad;
+        if (forceYMin != null) {
+            minY = forceYMin;
+        }
+        if (forceYMax != null) {
+            maxY = forceYMax;
+        }
+        if (maxY <= minY) {
+            maxY = minY + 1.0;
+        }
+        if (forceYMin == null && forceYMax == null) {
+            double yPad = Math.max((maxY - minY) * 0.08, 1e-6);
+            minY -= yPad;
+            maxY += yPad;
+        }
 
         g.setFont(new Font("SansSerif", Font.BOLD, 16));
         g.setColor(hex("#111827"));
@@ -518,6 +559,18 @@ public class FirstProduceWithMessageLoadPlot {
             }
         }
         return out;
+    }
+
+    private static double maxSeriesY(List<Series> series) {
+        double max = Double.NEGATIVE_INFINITY;
+        for (Series s : series) {
+            for (double y : s.ys) {
+                if (!Double.isNaN(y)) {
+                    max = Math.max(max, y);
+                }
+            }
+        }
+        return max;
     }
 
     private static boolean hasAnyFinite(List<Double> values) {

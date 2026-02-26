@@ -12,6 +12,8 @@ OUT_DIR="${ROOT_DIR}/kafka-4.2/output/first-produce-with-message-load"
 FIG_DIR=""
 TIMESTAMP=""
 ALL=0
+SCATTER_Y_MIN=""
+SCATTER_Y_MAX=""
 
 usage() {
   cat <<'EOF'
@@ -22,6 +24,8 @@ Options:
   --fig-dir <dir>        Output directory for generated plots
   --timestamp <ts>       Specific timestamp suffix (e.g. 20260226_020448)
   --all                  Plot all matching timestamp pairs
+  --scatter-y-min <v>    Shared Y-axis minimum for combined scatter plots
+  --scatter-y-max <v>    Shared Y-axis maximum for combined scatter plots
   --help                 Show this help
 EOF
 }
@@ -55,6 +59,22 @@ while [[ $# -gt 0 ]]; do
     --all)
       ALL=1
       shift
+      ;;
+    --scatter-y-min)
+      if [[ -z "${2:-}" ]]; then
+        echo "--scatter-y-min requires a value" >&2
+        exit 1
+      fi
+      SCATTER_Y_MIN="$2"
+      shift 2
+      ;;
+    --scatter-y-max)
+      if [[ -z "${2:-}" ]]; then
+        echo "--scatter-y-max requires a value" >&2
+        exit 1
+      fi
+      SCATTER_Y_MAX="$2"
+      shift 2
       ;;
     --help|-h)
       usage
@@ -128,6 +148,12 @@ if [[ -z "${RUN_IN_DOCKER:-}" ]]; then
   if [[ "$ALL" -eq 1 ]]; then
     DOCKER_ARGS+=(--all)
   fi
+  if [[ -n "$SCATTER_Y_MIN" ]]; then
+    DOCKER_ARGS+=(--scatter-y-min "$SCATTER_Y_MIN")
+  fi
+  if [[ -n "$SCATTER_Y_MAX" ]]; then
+    DOCKER_ARGS+=(--scatter-y-max "$SCATTER_Y_MAX")
+  fi
 
   docker run --rm \
     -e RUN_IN_DOCKER=1 \
@@ -163,6 +189,12 @@ if [[ -n "$TIMESTAMP" ]]; then
 fi
 if [[ "$ALL" -eq 1 ]]; then
   JAVA_ARGS+=(--all)
+fi
+if [[ -n "$SCATTER_Y_MIN" ]]; then
+  JAVA_ARGS+=(--scatter-y-min "$SCATTER_Y_MIN")
+fi
+if [[ -n "$SCATTER_Y_MAX" ]]; then
+  JAVA_ARGS+=(--scatter-y-max "$SCATTER_Y_MAX")
 fi
 
 java -cp "$TMP_BUILD_DIR" FirstProduceWithMessageLoadPlot "${JAVA_ARGS[@]}"
