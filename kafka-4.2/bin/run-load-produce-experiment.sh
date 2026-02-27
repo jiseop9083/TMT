@@ -7,7 +7,7 @@
 #   2. Cleans previous Kafka data
 #   3. Builds Kafka
 #   4. Formats and starts the broker (logs saved)
-#   5. Starts N background producers sending every 300ms to a temp topic
+#   5. Starts N background producers sending every 100ms to a temp topic
 #   6. Runs the latency experiment (3000 topics, 15 sends each)
 #   7. Stops background producers
 #   8. Shuts down the broker
@@ -19,7 +19,8 @@ KAFKA_HOME="$(cd "$(dirname "$0")/.." && pwd)"
 CONFIG="$KAFKA_HOME/config/server.properties"
 LOG_DIR="/tmp/kraft-combined-logs"
 BOOTSTRAP_SERVER="localhost:9092"
-OUTPUT_BASE="$KAFKA_HOME/output"
+OUTPUT_BASE="$KAFKA_HOME/output/multi-produce-to-same-topics"
+RESOURCE_SAMPLE_INTERVAL_SEC="${RESOURCE_SAMPLE_INTERVAL_SEC:-2}"
 
 # Experiment defaults
 NUM_TOPICS="${NUM_TOPICS:-3000}"
@@ -30,10 +31,12 @@ REPLICATION_FACTOR="${REPLICATION_FACTOR:-1}"
 ACKS="${ACKS:-1}"
 
 # Background load defaults
-LOAD_NUM_PRODUCERS="${LOAD_NUM_PRODUCERS:-100}"
-LOAD_INTERVAL_MS="${LOAD_INTERVAL_MS:-300}"
+LOAD_NUM_PRODUCERS="${LOAD_NUM_PRODUCERS:-5}"
+LOAD_INTERVAL_MS="${LOAD_INTERVAL_MS:-100}"
 LOAD_RECORD_SIZE="${LOAD_RECORD_SIZE:-1024}"
 LOAD_TOPIC="${LOAD_TOPIC:-background_load_topic}"
+RESOURCE_SAMPLER_PID=""
+LOAD_PID=""
 
 # Determine size name from RECORD_SIZE
 case $RECORD_SIZE in
@@ -51,8 +54,112 @@ log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
 }
 
+now_epoch_ms() {
+    if command -v python3 >/dev/null 2>&1; then
+        python3 -c 'import time; print(int(time.time()*1000))'
+    else
+        echo "$(date '+%s')000"
+    fi
+}
+
+count_topic_dirs() {
+    local base_dir="$1"
+    if [[ ! -d "$base_dir" ]]; then
+        echo "0"
+        return 0
+    fi
+    find "$base_dir" -maxdepth 1 -type d -name 'test_topic_*' 2>/dev/null | wc -l | tr -d ' '
+}
+
+measure_ps_stats() {
+    local pid="$1"
+    if ! command -v ps >/dev/null 2>&1; then
+        echo ",,"
+        return 0
+    fi
+    local row
+    row="$(ps -p "$pid" -o %cpu=,rss=,vsz= 2>/dev/null | awk 'NR==1{print $1","$2","$3}')"
+    if [[ -z "$row" ]]; then
+        echo ",,"
+    else
+        echo "$row"
+    fi
+}
+
+measure_heap_kb() {
+    local pid="$1"
+    if ! command -v jstat >/dev/null 2>&1; then
+        echo ","
+        return 0
+    fi
+    local gc_row
+    gc_row="$(jstat -gc "$pid" 2>/dev/null | awk 'NR==2{print $1","$2","$3","$4","$5","$6","$7","$8}')"
+    if [[ -z "$gc_row" ]]; then
+        echo ","
+        return 0
+    fi
+    IFS=',' read -r s0c s1c s0u s1u ec eu oc ou <<<"$gc_row"
+    awk -v s0c="${s0c:-0}" -v s1c="${s1c:-0}" -v ec="${ec:-0}" -v oc="${oc:-0}" \
+        -v s0u="${s0u:-0}" -v s1u="${s1u:-0}" -v eu="${eu:-0}" -v ou="${ou:-0}" \
+        'BEGIN{
+            committed=s0c+s1c+ec+oc;
+            used=s0u+s1u+eu+ou;
+            printf "%.0f,%.0f", used, committed;
+        }'
+}
+
+measure_storage_kb() {
+    local base_dir="$1"
+    if [[ ! -d "$base_dir" ]]; then
+        echo "0"
+        return 0
+    fi
+    du -sk "$base_dir" 2>/dev/null | awk '{print $1}'
+}
+
+start_resource_sampler() {
+    local pid="$1"
+    local out_csv="$2"
+    if [[ -z "$pid" ]] || ! kill -0 "$pid" 2>/dev/null; then
+        log "WARN: Broker PID is not alive; skipping resource sampling."
+        return 0
+    fi
+
+    printf '%s\n' "timestamp,epoch_ms,broker_pid,topic_dir_count,cpu_pct,rss_kb,vsz_kb,heap_used_kb,heap_committed_kb,log_dir_storage_kb" >"$out_csv"
+    (
+        while kill -0 "$pid" 2>/dev/null; do
+            local now epoch_ms topic_dir_count ps_stats cpu_pct rss_kb vsz_kb heap_stats heap_used_kb heap_committed_kb
+            local log_dir_storage_kb
+            now="$(date '+%Y-%m-%d %H:%M:%S')"
+            epoch_ms="$(now_epoch_ms)"
+            topic_dir_count="$(count_topic_dirs "$LOG_DIR")"
+            ps_stats="$(measure_ps_stats "$pid")"
+            IFS=',' read -r cpu_pct rss_kb vsz_kb <<<"$ps_stats"
+            heap_stats="$(measure_heap_kb "$pid")"
+            IFS=',' read -r heap_used_kb heap_committed_kb <<<"$heap_stats"
+            log_dir_storage_kb="$(measure_storage_kb "$LOG_DIR")"
+            printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
+                "$now" "$epoch_ms" "$pid" "${topic_dir_count:-0}" "${cpu_pct:-}" "${rss_kb:-}" "${vsz_kb:-}" \
+                "${heap_used_kb:-}" "${heap_committed_kb:-}" "${log_dir_storage_kb:-0}" \
+                >>"$out_csv"
+            sleep "$RESOURCE_SAMPLE_INTERVAL_SEC"
+        done
+    ) &
+    RESOURCE_SAMPLER_PID=$!
+    log "Started resource sampler (PID: $RESOURCE_SAMPLER_PID), interval=${RESOURCE_SAMPLE_INTERVAL_SEC}s"
+}
+
+stop_resource_sampler() {
+    if [[ -n "${RESOURCE_SAMPLER_PID:-}" ]] && kill -0 "$RESOURCE_SAMPLER_PID" 2>/dev/null; then
+        kill "$RESOURCE_SAMPLER_PID" 2>/dev/null || true
+        wait "$RESOURCE_SAMPLER_PID" 2>/dev/null || true
+    fi
+    RESOURCE_SAMPLER_PID=""
+}
+
 # Stop Kafka broker
 stop_kafka() {
+    stop_resource_sampler
     log "Stopping Kafka broker..."
     "$KAFKA_HOME/bin/kafka-server-stop.sh" 2>/dev/null || true
     sleep 5
@@ -117,6 +224,7 @@ stop_load_producers() {
 
 # Cleanup on exit
 cleanup() {
+    stop_resource_sampler
     stop_load_producers
     stop_kafka
 }
@@ -139,6 +247,9 @@ OUTPUT_FILE="$OUTPUT_DIR/producer_latency_load_${EXPERIMENT_TS}.csv"
 BROKER_LOG="$BROKER_LOG_DIR/load_${EXPERIMENT_TS}.log"
 PRODUCER_LOG="$PRODUCER_LOG_DIR/load_${EXPERIMENT_TS}.log"
 LOAD_LOG="$LOAD_LOG_DIR/${EXPERIMENT_TS}.log"
+RESOURCE_DIR="$OUTPUT_DIR/resource"
+mkdir -p "$RESOURCE_DIR"
+RESOURCE_CSV="$RESOURCE_DIR/broker_resource_usage_${EXPERIMENT_TS}.csv"
 
 log "============================================"
 log "Producer Latency Experiment WITH Background Load"
@@ -161,6 +272,7 @@ log "Output CSV:        $OUTPUT_FILE"
 log "Broker log:        $BROKER_LOG"
 log "Producer log:      $PRODUCER_LOG"
 log "Load log:          $LOAD_LOG"
+log "Resource CSV:      $RESOURCE_CSV"
 log "============================================"
 
 # Step 1: Stop broker (if running)
@@ -183,6 +295,7 @@ log "[Step 3/7] Building Kafka..."
 log ""
 log "[Step 4/7] Starting broker..."
 start_kafka "$BROKER_LOG"
+start_resource_sampler "$KAFKA_PID" "$RESOURCE_CSV"
 
 # Step 5: Start background load producers
 log ""
@@ -260,6 +373,7 @@ log "Broker CSV:      $BROKER_CSV"
 log "Broker log:      $BROKER_LOG"
 log "Producer log:    $PRODUCER_LOG"
 log "Load log:        $LOAD_LOG"
+log "Resource CSV:    $RESOURCE_CSV"
 log "============================================"
 
 exit $EXPERIMENT_EXIT

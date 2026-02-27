@@ -9,8 +9,8 @@ OUT_DIR=""
 ZSCORE_FILTER=0
 ZSCORE_THRESHOLD=""
 REGRESSION=0
-E2E_MAX_MS="300"
-E2E_MIN_MS="100"
+E2E_MAX_MS="200"
+E2E_MIN_MS="0"
 BREAKDOWN_MAX_MS="200"
 BREAKDOWN_MIN_MS="0"
 INTERVAL_MS=""
@@ -361,11 +361,33 @@ list_producer_csvs() {
     return
   fi
   local -a files=()
-  for f in "$base_dir"/producer_latency_results_*.csv; do
-    if [[ -f "$f" ]]; then
-      files+=("$f")
+  local f=""
+  local key=""
+  local best=""
+  declare -A chosen=()
+
+  # Support both naming schemes:
+  # - producer_latency_results_<ts>.csv
+  # - producer_latency_load_<ts>.csv
+  # If both exist for the same <ts>, prefer the "results" file.
+  for f in "$base_dir"/producer_latency_results_*.csv "$base_dir"/producer_latency_load_*.csv; do
+    if [[ ! -f "$f" ]]; then
+      continue
+    fi
+    key="$(basename "$f")"
+    key="${key#producer_latency_results_}"
+    key="${key#producer_latency_load_}"
+
+    best="${chosen[$key]:-}"
+    if [[ -z "$best" || "$f" == *"/producer_latency_results_"* ]]; then
+      chosen["$key"]="$f"
     fi
   done
+
+  for key in "${!chosen[@]}"; do
+    files+=("${chosen[$key]}")
+  done
+
   if ((${#files[@]})); then
     printf '%s\n' "${files[@]}" | sort
   fi
@@ -463,6 +485,323 @@ write_producer_summary_csv() {
     cat "$tmp_csv"
   } >"$out_csv"
   rm -f "$tmp_csv"
+}
+
+list_resource_csvs() {
+  local base_dir="$1"
+  if [[ ! -d "$base_dir" ]]; then
+    return
+  fi
+
+  local base_name
+  base_name="$(basename "$base_dir")"
+  if [[ "$base_name" == run_* || "$base_name" == 202* ]]; then
+    find "$base_dir/resource" -maxdepth 1 -type f -name 'broker_resource_usage_*.csv' 2>/dev/null | sort
+  else
+    find "$base_dir" -maxdepth 3 -type f -path '*/resource/broker_resource_usage_*.csv' 2>/dev/null | sort
+  fi
+}
+
+write_resource_summary_csv() {
+  local out_csv="$1"
+  shift
+  if [[ $# -eq 0 ]]; then
+    return 1
+  fi
+  local tmp_csv
+  tmp_csv="$(mktemp)"
+  awk -F',' -v OFS=',' '
+    function trim(s) {
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", s)
+      return s
+    }
+    function is_number(s) {
+      return (s ~ /^-?[0-9]+([.][0-9]+)?([eE][+-]?[0-9]+)?$/)
+    }
+    function pctl_from_sorted(n, p,  rank) {
+      if (n <= 0) return ""
+      rank = int((p/100.0) * n + 0.999999)
+      if (rank < 1) rank = 1
+      if (rank > n) rank = n
+      return rank
+    }
+    function sort_numeric(arr, n,   i, j, t) {
+      for (i = 1; i <= n; i++) {
+        for (j = i + 1; j <= n; j++) {
+          if (arr[i] > arr[j]) {
+            t = arr[i]
+            arr[i] = arr[j]
+            arr[j] = t
+          }
+        }
+      }
+    }
+    FNR==1 {
+      file_idx++
+      src=file_idx
+      source[src]=FILENAME
+      delete idx
+      for (i=1; i<=NF; i++) {
+        idx[trim($i)] = i
+      }
+      first_epoch[src] = ""
+      last_epoch[src] = ""
+      next
+    }
+    {
+      epoch = trim($(idx["epoch_ms"]))
+      topic_dir_count = trim($(idx["topic_dir_count"]))
+      cpu = trim($(idx["cpu_pct"]))
+      rss = trim($(idx["rss_kb"]))
+      vsz = trim($(idx["vsz_kb"]))
+      heap_used = trim($(idx["heap_used_kb"]))
+      heap_committed = trim($(idx["heap_committed_kb"]))
+      storage = trim($(idx["log_dir_storage_kb"]))
+
+      if (is_number(epoch)) {
+        e = epoch + 0
+        if (first_epoch[src] == "" || e < first_epoch[src]) first_epoch[src] = e
+        if (last_epoch[src] == "" || e > last_epoch[src]) last_epoch[src] = e
+      }
+      if (is_number(topic_dir_count)) {
+        t = topic_dir_count + 0
+        if (!(src in max_topic_dirs) || t > max_topic_dirs[src]) max_topic_dirs[src] = t
+      }
+      if (is_number(cpu)) {
+        v = cpu + 0.0
+        cpu_count[src]++
+        cpu_sum[src] += v
+        cpu_vals[src SUBSEP cpu_count[src]] = v
+        if (!(src in cpu_max) || v > cpu_max[src]) cpu_max[src] = v
+      }
+      if (is_number(rss)) {
+        v = rss + 0.0
+        rss_count[src]++
+        rss_sum[src] += v
+        if (!(src in rss_max) || v > rss_max[src]) rss_max[src] = v
+      }
+      if (is_number(vsz)) {
+        v = vsz + 0.0
+        vsz_count[src]++
+        vsz_sum[src] += v
+        if (!(src in vsz_max) || v > vsz_max[src]) vsz_max[src] = v
+      }
+      if (is_number(heap_used)) {
+        v = heap_used + 0.0
+        heap_used_count[src]++
+        heap_used_sum[src] += v
+        if (!(src in heap_used_max) || v > heap_used_max[src]) heap_used_max[src] = v
+      }
+      if (is_number(heap_committed)) {
+        v = heap_committed + 0.0
+        heap_committed_count[src]++
+        heap_committed_sum[src] += v
+        if (!(src in heap_committed_max) || v > heap_committed_max[src]) heap_committed_max[src] = v
+      }
+      if (is_number(storage)) {
+        v = storage + 0.0
+        storage_count[src]++
+        storage_sum[src] += v
+        if (!(src in storage_max) || v > storage_max[src]) storage_max[src] = v
+      }
+    }
+    END {
+      for (src=1; src<=file_idx; src++) {
+        cpu_avg = cpu_count[src] ? (cpu_sum[src]/cpu_count[src]) : ""
+        rss_avg = rss_count[src] ? (rss_sum[src]/rss_count[src]) : ""
+        vsz_avg = vsz_count[src] ? (vsz_sum[src]/vsz_count[src]) : ""
+        heap_used_avg = heap_used_count[src] ? (heap_used_sum[src]/heap_used_count[src]) : ""
+        heap_committed_avg = heap_committed_count[src] ? (heap_committed_sum[src]/heap_committed_count[src]) : ""
+        storage_avg = storage_count[src] ? (storage_sum[src]/storage_count[src]) : ""
+
+        cpu_p95 = ""
+        if (cpu_count[src] > 0) {
+          n = cpu_count[src]
+          delete tmp
+          for (i=1; i<=n; i++) tmp[i] = cpu_vals[src SUBSEP i]
+          sort_numeric(tmp, n)
+          rank = pctl_from_sorted(n, 95)
+          cpu_p95 = tmp[rank]
+        }
+
+        duration_sec = ""
+        if (first_epoch[src] != "" && last_epoch[src] != "" && last_epoch[src] >= first_epoch[src]) {
+          duration_sec = (last_epoch[src] - first_epoch[src]) / 1000.0
+        }
+
+        printf "%s,%d,%.3f,%s,%.6f,%.6f,%.6f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f\n",
+          source[src],
+          cpu_count[src] + 0,
+          duration_sec,
+          ((src in max_topic_dirs) ? max_topic_dirs[src] : ""),
+          cpu_avg, cpu_p95, ((src in cpu_max) ? cpu_max[src] : 0),
+          rss_avg, ((src in rss_max) ? rss_max[src] : 0),
+          vsz_avg, ((src in vsz_max) ? vsz_max[src] : 0),
+          heap_used_avg, ((src in heap_used_max) ? heap_used_max[src] : 0),
+          heap_committed_avg, ((src in heap_committed_max) ? heap_committed_max[src] : 0),
+          storage_avg, ((src in storage_max) ? storage_max[src] : 0)
+      }
+    }
+  ' "$@" >"$tmp_csv"
+  {
+    printf '%s\n' "resource_csv,sample_count,duration_sec,max_topic_dir_count,cpu_pct_avg,cpu_pct_p95,cpu_pct_max,rss_kb_avg,rss_kb_max,vsz_kb_avg,vsz_kb_max,heap_used_kb_avg,heap_used_kb_max,heap_committed_kb_avg,heap_committed_kb_max,log_dir_storage_kb_avg,log_dir_storage_kb_max"
+    cat "$tmp_csv"
+  } >"$out_csv"
+  rm -f "$tmp_csv"
+}
+
+generate_resource_plots() {
+  local figures_resource_dir="$1"
+  shift
+  if [[ $# -eq 0 ]]; then
+    return 0
+  fi
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "python3 not found; skipping resource plots."
+    return 0
+  fi
+
+  mkdir -p "$figures_resource_dir"
+  local csv_path
+  for csv_path in "$@"; do
+    if [[ ! -f "$csv_path" ]]; then
+      continue
+    fi
+    local base_name ts
+    base_name="$(basename "$csv_path")"
+    ts="${base_name#broker_resource_usage_}"
+    ts="${ts%.csv}"
+    python3 - "$csv_path" "$figures_resource_dir" "$ts" <<'PY'
+import csv
+import sys
+from pathlib import Path
+
+csv_path = Path(sys.argv[1])
+out_dir = Path(sys.argv[2])
+ts = sys.argv[3] or "unknown"
+
+try:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+except Exception as e:
+    print(f"matplotlib unavailable; skipping plots for {csv_path}: {e}")
+    sys.exit(0)
+
+rows = []
+with csv_path.open(newline="") as f:
+    reader = csv.DictReader(f)
+    for r in reader:
+        rows.append(r)
+
+if not rows:
+    print(f"No rows in {csv_path}; skipping plots.")
+    sys.exit(0)
+
+def num(v):
+    if v is None:
+        return None
+    v = str(v).strip()
+    if not v:
+        return None
+    try:
+        return float(v)
+    except ValueError:
+        return None
+
+times = []
+for i, r in enumerate(rows):
+    epoch = num(r.get("epoch_ms"))
+    times.append((epoch / 1000.0) if epoch is not None else float(i))
+t0 = times[0]
+times = [t - t0 for t in times]
+
+cpu = [num(r.get("cpu_pct")) for r in rows]
+rss_mb = [((num(r.get("rss_kb")) or 0.0) / 1024.0) if num(r.get("rss_kb")) is not None else None for r in rows]
+heap_used_mb = [((num(r.get("heap_used_kb")) or 0.0) / 1024.0) if num(r.get("heap_used_kb")) is not None else None for r in rows]
+storage_mb = [((num(r.get("log_dir_storage_kb")) or 0.0) / 1024.0) if num(r.get("log_dir_storage_kb")) is not None else None for r in rows]
+
+def has_values(series):
+    return any(v is not None for v in series)
+
+def save_plot(path, title, y_label, series):
+    fig, ax = plt.subplots(figsize=(10, 4))
+    for label, vals, color in series:
+        if not has_values(vals):
+            continue
+        ax.plot(times, vals, label=label, linewidth=1.7, color=color)
+    ax.set_title(title)
+    ax.set_xlabel("Elapsed time (s)")
+    ax.set_ylabel(y_label)
+    ax.grid(alpha=0.25, linestyle="--")
+    if len(ax.lines) > 1:
+        ax.legend()
+    fig.tight_layout()
+    fig.savefig(path, dpi=140)
+    plt.close(fig)
+
+cpu_png = out_dir / f"cpu_{ts}.png"
+mem_png = out_dir / f"memory_{ts}.png"
+disk_png = out_dir / f"disk_{ts}.png"
+
+if has_values(cpu):
+    save_plot(cpu_png, f"Broker CPU Usage ({ts})", "CPU (%)", [("cpu_pct", cpu, "#d7263d")])
+if has_values(rss_mb) or has_values(heap_used_mb):
+    save_plot(
+        mem_png,
+        f"Broker Memory Usage ({ts})",
+        "Memory (MB)",
+        [
+            ("memory usage", rss_mb, "#1f77b4"),
+            ("heap usage", heap_used_mb, "#2ca02c"),
+        ],
+    )
+if has_values(storage_mb):
+    save_plot(disk_png, f"Broker Log Storage ({ts})", "Storage (MB)", [("log_dir_storage_mb", storage_mb, "#6a4c93")])
+
+print(f"Wrote resource plots for {csv_path}")
+PY
+  done
+}
+
+emit_resource_summary() {
+  local out_dir="$1"
+  local figures_base_dir_local
+  figures_base_dir_local="$(map_to_figures "$out_dir")"
+  local out_base_name
+  out_base_name="$(basename "$out_dir")"
+  if [[ "$out_base_name" == run_* || "$out_base_name" == 202* ]]; then
+    figures_base_dir_local="$(map_to_figures "${out_dir%/*}")"
+  fi
+
+  local resource_csv_count=0
+  local resource_csv_first=""
+  local latest_resource_csv=""
+  local resource_csvs=()
+  local csv_path
+  while IFS= read -r csv_path; do
+    if [[ -z "$csv_path" ]]; then
+      continue
+    fi
+    if [[ "$resource_csv_count" -eq 0 ]]; then
+      resource_csv_first="$csv_path"
+    fi
+    latest_resource_csv="$csv_path"
+    resource_csv_count=$((resource_csv_count + 1))
+    resource_csvs+=("$csv_path")
+  done < <(list_resource_csvs "$out_dir")
+
+  if [[ "$resource_csv_count" -gt 0 ]]; then
+    local resource_out_dir="${figures_base_dir_local%/}/resource"
+    local resource_summary_csv
+    mkdir -p "$resource_out_dir"
+    resource_summary_csv="$resource_out_dir/resource_summary.csv"
+    write_resource_summary_csv "$resource_summary_csv" "${resource_csvs[@]}"
+    generate_resource_plots "$resource_out_dir" "${resource_csvs[@]}"
+    echo "Resource CSV files: $resource_csv_count"
+    echo "Resource range: $resource_csv_first -> $latest_resource_csv"
+    echo "Resource summary CSV: $resource_summary_csv"
+  fi
 }
 
 if [[ -z "${RUN_IN_DOCKER:-}" ]]; then
@@ -570,6 +909,7 @@ else
   fi
 
   if [[ "$RUN_MODE" == "latency" ]]; then
+    emit_resource_summary "$OUT_DIR"
     exit 0
   fi
 fi
@@ -653,3 +993,5 @@ java -cp "$TMP_BUILD_DIR" JfrLatencyPlot "${PLOT_ARGS[@]}"
 if [[ -z "$latest_producer_csv" ]]; then
   write_e2e_csv "$figures_base_dir"
 fi
+
+emit_resource_summary "$OUT_DIR"
