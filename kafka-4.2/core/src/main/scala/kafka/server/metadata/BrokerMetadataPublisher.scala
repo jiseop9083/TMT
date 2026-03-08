@@ -17,7 +17,11 @@
 
 package kafka.server.metadata
 
+import java.nio.charset.StandardCharsets
+import java.nio.file.{Files, Path, Paths, StandardCopyOption, StandardOpenOption}
+import java.util.Locale
 import java.util.OptionalInt
+import java.util.concurrent.TimeUnit
 import kafka.coordinator.transaction.TransactionCoordinator
 import kafka.log.LogManager
 import kafka.server.share.SharePartitionManager
@@ -45,6 +49,83 @@ import scala.jdk.CollectionConverters._
 
 
 object BrokerMetadataPublisher extends Logging {
+  private val MetadataPublisherMetricsFileProp = "kafka.metadata.publisher.metrics.file"
+  private val metricsFilePath: Option[Path] =
+    Option(System.getProperty(MetadataPublisherMetricsFileProp)).map(_.trim).filter(_.nonEmpty).map(Paths.get(_))
+
+  private case class OnMetadataUpdateSnapshot(
+    lastUpdateEpochMs: Long,
+    count: Long,
+    mean: Double,
+    p50: Double,
+    p95: Double,
+    p99: Double,
+    max: Double
+  ) {
+    def toCsv: String =
+      f"$lastUpdateEpochMs,$count,$mean%.3f,$p50%.3f,$p95%.3f,$p99%.3f,$max%.3f"
+  }
+
+  private val onMetadataUpdateDurationsUs = new mutable.ArrayBuffer[Long]()
+  private var onMetadataUpdateCount = 0L
+  private var onMetadataUpdateSumUs = 0L
+  private var onMetadataUpdateMaxUs = 0L
+
+  private def percentile(sorted: Seq[Long], p: Double): Double = {
+    if (sorted.isEmpty) {
+      0.0
+    } else {
+      val rank = Math.ceil((p / 100.0) * sorted.size).toInt
+      val idx = Math.max(0, Math.min(sorted.size - 1, rank - 1))
+      sorted(idx).toDouble
+    }
+  }
+
+  private def buildSnapshot(nowMs: Long): OnMetadataUpdateSnapshot = synchronized {
+    val sorted: Seq[Long] = onMetadataUpdateDurationsUs.sorted.toSeq
+    val mean = if (onMetadataUpdateCount == 0) 0.0 else onMetadataUpdateSumUs.toDouble / onMetadataUpdateCount.toDouble
+    OnMetadataUpdateSnapshot(
+      lastUpdateEpochMs = nowMs,
+      count = onMetadataUpdateCount,
+      mean = mean,
+      p50 = percentile(sorted, 50.0),
+      p95 = percentile(sorted, 95.0),
+      p99 = percentile(sorted, 99.0),
+      max = onMetadataUpdateMaxUs.toDouble
+    )
+  }
+
+  def recordOnMetadataUpdateElapsedNanos(elapsedNs: Long): Unit = {
+    val elapsedUs = TimeUnit.NANOSECONDS.toMicros(elapsedNs)
+    val nowMs = System.currentTimeMillis()
+    val snapshot = synchronized {
+      onMetadataUpdateDurationsUs += elapsedUs
+      onMetadataUpdateCount += 1
+      onMetadataUpdateSumUs += elapsedUs
+      onMetadataUpdateMaxUs = Math.max(onMetadataUpdateMaxUs, elapsedUs)
+      buildSnapshot(nowMs)
+    }
+
+    metricsFilePath.foreach { path =>
+      try {
+        Option(path.getParent).foreach(Files.createDirectories(_))
+        val tmpPath = path.resolveSibling(path.getFileName.toString + ".tmp")
+        Files.writeString(
+          tmpPath,
+          snapshot.toCsv + System.lineSeparator(),
+          StandardCharsets.UTF_8,
+          StandardOpenOption.CREATE,
+          StandardOpenOption.TRUNCATE_EXISTING,
+          StandardOpenOption.WRITE
+        )
+        Files.move(tmpPath, path, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+      } catch {
+        case t: Throwable =>
+          warn(s"Failed to write metadata publisher timing snapshot to $path", t)
+      }
+    }
+  }
+
   /**
    * Given a topic name, find out if it changed. Note: if a topic named X was deleted and
    * then re-created, this method will return just the re-creation. The deletion will show
@@ -116,6 +197,7 @@ class BrokerMetadataPublisher(
     newImage: MetadataImage,
     manifest: LoaderManifest
   ): Unit = {
+    val onMetadataUpdateStartNs = System.nanoTime()
     val highestOffsetAndEpoch = newImage.highestOffsetAndEpoch()
 
     val deltaName = if (_firstPublish) {
@@ -273,6 +355,20 @@ class BrokerMetadataPublisher(
       case t: Throwable => metadataPublishingFaultHandler.handleFault("Uncaught exception while " +
         s"publishing broker metadata from $deltaName", t)
     } finally {
+      val elapsedNs = System.nanoTime() - onMetadataUpdateStartNs
+      BrokerMetadataPublisher.recordOnMetadataUpdateElapsedNanos(elapsedNs)
+      val elapsedMs = elapsedNs / 1000000.0
+      val changedTopicNames = Option(delta.topicsDelta()).map { topicsDelta =>
+        val changed = topicsDelta.changedTopics().values().asScala.map(_.name()).toSet
+        val deleted = topicsDelta.deletedTopicIds().asScala.flatMap { id =>
+          Option(topicsDelta.image().getTopic(id)).map(_.name())
+        }.toSet
+        (changed ++ deleted).toSeq.sorted
+      }.getOrElse(Seq.empty)
+      if (changedTopicNames.nonEmpty) {
+        val topicList = changedTopicNames.mkString("|")
+        info(s"BROKER_METADATA_UPDATE elapsed_ms=${String.format(Locale.ROOT, "%.3f", elapsedMs)} topics=$topicList")
+      }
       _firstPublish = false
       firstPublishFuture.complete(null)
     }
