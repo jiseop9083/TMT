@@ -22,6 +22,7 @@ LOG_DIR_OVERRIDE=""
 JMX_PORT="${JMX_PORT:-9999}"
 JMX_URL=""
 OUTPUT_DIR=""
+OUTPUT_DIR_EXPLICIT=0
 REPEAT_COUNT=1
 BROKER_STARTUP_TIMEOUT_SEC=60
 BROKER_LOG_DIR=""
@@ -95,7 +96,7 @@ while [ $# -gt 0 ]; do
     --jmx-url)
       JMX_URL="$2"; shift 2 ;;
     --output-dir)
-      OUTPUT_DIR="$2"; shift 2 ;;
+      OUTPUT_DIR="$2"; OUTPUT_DIR_EXPLICIT=1; shift 2 ;;
     --repeat)
       REPEAT_COUNT="$2"; shift 2 ;;
     -h|--help)
@@ -123,12 +124,18 @@ fi
 
 if [ "$REPEAT_COUNT" -gt 1 ]; then
   SCRIPT_PATH="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
-  BASE_OUTPUT_DIR="$OUTPUT_DIR"
-  mkdir -p "$BASE_OUTPUT_DIR"
-  echo "Running create/delete cycle $REPEAT_COUNT times. Base output: $BASE_OUTPUT_DIR"
+  echo "Running create/delete cycle $REPEAT_COUNT times."
   i=1
   while [ "$i" -le "$REPEAT_COUNT" ]; do
-    ITER_DIR="$BASE_OUTPUT_DIR/run_$(printf '%03d' "$i")"
+    if [ "$OUTPUT_DIR_EXPLICIT" -eq 1 ]; then
+      ITER_DIR="${OUTPUT_DIR}_$(printf '%03d' "$i")"
+    else
+      ITER_TS="$(date '+%Y%m%d_%H%M%S')"
+      ITER_DIR="$KAFKA_HOME/output/create-delete/$ITER_TS"
+      if [ -e "$ITER_DIR" ]; then
+        ITER_DIR="${ITER_DIR}_$(printf '%03d' "$i")"
+      fi
+    fi
     echo "[$i/$REPEAT_COUNT] output-dir: $ITER_DIR"
     "$SCRIPT_PATH" \
       --bootstrap-server "$BOOTSTRAP_SERVER" \
