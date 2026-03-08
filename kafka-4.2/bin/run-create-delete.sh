@@ -168,6 +168,7 @@ RESOURCE_CSV="$OUTPUT_DIR/resource_usage.csv"
 TOPIC_OPS_CSV="$OUTPUT_DIR/topic_ops.csv"
 EVENTS_CSV="$OUTPUT_DIR/events.csv"
 TOPIC_CREATE_REQUESTS_CSV="$OUTPUT_DIR/topic_create_requests.csv"
+TOPIC_DELETE_REQUESTS_CSV="$OUTPUT_DIR/topic_delete_requests.csv"
 RUN_LOG="$OUTPUT_DIR/run.log"
 STOP_FILE="$OUTPUT_DIR/.stop"
 PHASE_FILE="$OUTPUT_DIR/.phase"
@@ -259,6 +260,32 @@ format_storage_if_needed() {
   log "KRaft storage formatted. cluster.id=$cluster_id"
 }
 
+clear_log_dirs_before_start() {
+  local d
+  local trimmed
+  local target
+  IFS=',' read -r -a _log_dirs <<< "$LOG_DIRS_RAW"
+  for d in "${_log_dirs[@]}"; do
+    trimmed="$(echo "$d" | tr -d '[:space:]')"
+    if [ -z "$trimmed" ]; then
+      continue
+    fi
+
+    case "$trimmed" in
+      /|.|..)
+        log "ERROR: Refusing to clear unsafe log.dirs path: $trimmed"
+        exit 1
+        ;;
+    esac
+
+    target="$trimmed"
+    mkdir -p "$target"
+    log "Clearing broker log.dirs path before start: $target"
+    rm -rf "$target"
+    mkdir -p "$target"
+  done
+}
+
 start_broker() {
   bootstrap_host_port
 
@@ -267,6 +294,7 @@ start_broker() {
     exit 1
   fi
 
+  clear_log_dirs_before_start
   format_storage_if_needed
 
   log "Starting Kafka broker..."
@@ -379,6 +407,7 @@ printf "timestamp,sample_id,phase,metric_name,metric_object,count,mean,p50,p95,p
 printf "timestamp,epoch_ms,sample_id,phase,process_cpu_load,system_cpu_load,total_mem_bytes,free_mem_bytes,disk_used_kb,disk_avail_kb,disk_use_percent,status,error\n" > "$RESOURCE_CSV"
 printf "timestamp,epoch_ms,op,topic,idx,phase,elapsed_ms,status,error\n" > "$TOPIC_OPS_CSV"
 printf "seq,topic_name,request_latency_us,e2e_latency_us,on_metadata_duration_us,produce_duration_us,status,error\n" > "$TOPIC_CREATE_REQUESTS_CSV"
+printf "timestamp,epoch_ms,topic,phase,delete_latency_ms,broker_metadata_update_ms,status,error\n" > "$TOPIC_DELETE_REQUESTS_CSV"
 
 start_broker
 
@@ -620,6 +649,7 @@ java -cp "$RUNNER_CP" TopicChurnRunner \
   "$PHASE_FILE" \
   "$TOPIC_CREATE_REQUESTS_CSV" \
   "$E2E_CSV" \
+  "$TOPIC_DELETE_REQUESTS_CSV" \
   "$BROKER_LOG" > "$RUNNER_PIPE" 2>&1 &
 RUNNER_PID=$!
 
@@ -653,6 +683,7 @@ log "  - $BROKER_META_CSV"
 log "  - $RESOURCE_CSV"
 log "  - $TOPIC_OPS_CSV"
 log "  - $TOPIC_CREATE_REQUESTS_CSV"
+log "  - $TOPIC_DELETE_REQUESTS_CSV"
 log "  - $EVENTS_CSV"
 log "  - $RUN_LOG"
 log "  - $BROKER_LOG"

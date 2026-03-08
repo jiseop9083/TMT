@@ -64,6 +64,16 @@ public class CreateDeleteMetricsPlot {
         }
     }
 
+    static class DeletePoint {
+        final double elapsedSec;
+        final double deleteLatencyMs;
+
+        DeletePoint(double elapsedSec, double deleteLatencyMs) {
+            this.elapsedSec = elapsedSec;
+            this.deleteLatencyMs = deleteLatencyMs;
+        }
+    }
+
     static class PhaseRange {
         final double startSec;
         final double endSec;
@@ -124,6 +134,7 @@ public class CreateDeleteMetricsPlot {
         List<ResourcePoint> resources = new ArrayList<>();
         List<E2ePoint> e2e = new ArrayList<>();
         List<BrokerPoint> broker = new ArrayList<>();
+        List<DeletePoint> deletes = new ArrayList<>();
         List<PhaseRange> createDeleteRanges = new ArrayList<>();
         double elapsedOffset = 0.0;
         final double runGapSec = 5.0;
@@ -132,20 +143,24 @@ public class CreateDeleteMetricsPlot {
             Path resourceCsv = runDir.resolve("resource_usage.csv");
             Path e2eCsv = runDir.resolve("e2e_latency.csv");
             Path eventsCsv = runDir.resolve("events.csv");
+            Path deleteCsv = runDir.resolve("topic_delete_requests.csv");
 
             List<ResourcePoint> runResources = readResource(resourceCsv);
             List<E2ePoint> runE2e = readE2e(e2eCsv);
             List<BrokerPoint> runBroker = brokerPointsFromE2e(runE2e);
+            List<DeletePoint> runDeletes = readDelete(runDir.resolve("e2e_latency.csv"), deleteCsv);
             RunPhaseInfo runPhase = readRunPhaseInfo(eventsCsv);
 
             appendShiftedResources(resources, runResources, elapsedOffset);
             appendShiftedE2e(e2e, runE2e, elapsedOffset);
             appendShiftedBroker(broker, runBroker, elapsedOffset);
+            appendShiftedDelete(deletes, runDeletes, elapsedOffset);
             appendShiftedPhaseRanges(createDeleteRanges, runPhase.createDeleteRanges, elapsedOffset);
 
             double runDuration = Math.max(
                     maxElapsedResource(runResources),
-                    Math.max(maxElapsedE2e(runE2e), Math.max(maxElapsedBroker(runBroker), runPhase.durationSec)));
+                    Math.max(maxElapsedE2e(runE2e),
+                            Math.max(maxElapsedBroker(runBroker), Math.max(maxElapsedDelete(runDeletes), runPhase.durationSec))));
             elapsedOffset += runDuration + runGapSec;
         }
 
@@ -154,12 +169,14 @@ public class CreateDeleteMetricsPlot {
         renderResourcePanels(resources, plotDir.resolve("resource_usage.png"), e2eMinX, e2eMaxX);
         renderE2eScatter(e2e, createDeleteRanges, plotDir.resolve("e2e_latency_scatter.png"));
         renderBrokerScatter(broker, plotDir.resolve("broker_metadata_scatter.png"));
+        renderDeleteScatter(deletes, plotDir.resolve("delete_latency_scatter.png"));
 
         System.out.println("Input dir: " + inputDir);
         System.out.println("Merged runs: " + runDirs.size());
         System.out.println("Wrote: " + plotDir.resolve("resource_usage.png"));
         System.out.println("Wrote: " + plotDir.resolve("e2e_latency_scatter.png"));
         System.out.println("Wrote: " + plotDir.resolve("broker_metadata_scatter.png"));
+        System.out.println("Wrote: " + plotDir.resolve("delete_latency_scatter.png"));
     }
 
     static List<Path> resolveRunDirs(Path input) throws IOException {
@@ -330,6 +347,71 @@ public class CreateDeleteMetricsPlot {
         }
         rows.sort(Comparator.comparingDouble(r -> r.elapsedSec));
         return rows;
+    }
+
+    static List<DeletePoint> readDelete(Path e2eCsv, Path deleteCsv) throws IOException {
+        List<DeletePoint> rows = new ArrayList<>();
+        if (!Files.exists(deleteCsv)) {
+            return rows;
+        }
+        long baseTs = readBaseTs(e2eCsv);
+        if (baseTs < 0) {
+            baseTs = readBaseTs(deleteCsv);
+        }
+        if (baseTs < 0) {
+            return rows;
+        }
+        try (BufferedReader reader = Files.newBufferedReader(deleteCsv)) {
+            String header = reader.readLine();
+            if (header == null) {
+                return rows;
+            }
+            Map<String, Integer> idx = headerIndex(header);
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (line.trim().isEmpty()) {
+                    continue;
+                }
+                String[] p = line.split(",", -1);
+                if (!"ok".equalsIgnoreCase(value(p, idx, "status"))) {
+                    continue;
+                }
+                long ts = parseTs(value(p, idx, "timestamp"));
+                if (ts < 0) {
+                    continue;
+                }
+                double elapsedSec = (ts - baseTs) / 1000.0;
+                double deleteLatencyMs = parseDouble(value(p, idx, "delete_latency_ms"));
+                rows.add(new DeletePoint(elapsedSec, deleteLatencyMs));
+            }
+        }
+        rows.sort(Comparator.comparingDouble(r -> r.elapsedSec));
+        return rows;
+    }
+
+    static long readBaseTs(Path csv) throws IOException {
+        if (!Files.exists(csv)) {
+            return -1L;
+        }
+        try (BufferedReader reader = Files.newBufferedReader(csv)) {
+            String header = reader.readLine();
+            if (header == null) {
+                return -1L;
+            }
+            Map<String, Integer> idx = headerIndex(header);
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (line.trim().isEmpty()) {
+                    continue;
+                }
+                String[] p = line.split(",", -1);
+                long ts = parseTs(value(p, idx, "timestamp"));
+                if (ts >= 0) {
+                    return ts;
+                }
+            }
+        }
+        return -1L;
     }
 
     static Map<String, Integer> headerIndex(String headerLine) {
@@ -611,6 +693,29 @@ public class CreateDeleteMetricsPlot {
                 200.0);
     }
 
+    static void renderDeleteScatter(List<DeletePoint> rows, Path outPath) throws IOException {
+        List<Double> xs = new ArrayList<>();
+        List<Double> ys = new ArrayList<>();
+        for (DeletePoint r : rows) {
+            if (!Double.isNaN(r.elapsedSec) && !Double.isNaN(r.deleteLatencyMs)) {
+                xs.add(r.elapsedSec);
+                ys.add(r.deleteLatencyMs);
+            }
+        }
+        renderScatter(
+                xs,
+                List.of(ys),
+                List.of("delete latency (ms)"),
+                List.of(Color.decode("#0EA5E9")),
+                "Delete Latency Scatter",
+                outPath,
+                "Elapsed Time (sec)",
+                "Latency (ms)",
+                List.of(),
+                0.0,
+                200.0);
+    }
+
     static void appendShiftedResources(List<ResourcePoint> target, List<ResourcePoint> source, double offsetSec) {
         for (ResourcePoint p : source) {
             target.add(new ResourcePoint(p.elapsedSec + offsetSec, p.cpuPercent, p.memoryMb, p.diskPercent));
@@ -627,6 +732,12 @@ public class CreateDeleteMetricsPlot {
         for (BrokerPoint p : source) {
             target.add(new BrokerPoint(
                     p.elapsedSec + offsetSec, p.brokerMetadataUpdateMs, p.phase));
+        }
+    }
+
+    static void appendShiftedDelete(List<DeletePoint> target, List<DeletePoint> source, double offsetSec) {
+        for (DeletePoint p : source) {
+            target.add(new DeletePoint(p.elapsedSec + offsetSec, p.deleteLatencyMs));
         }
     }
 
@@ -669,6 +780,16 @@ public class CreateDeleteMetricsPlot {
     static double maxElapsedBroker(List<BrokerPoint> rows) {
         double max = 0.0;
         for (BrokerPoint r : rows) {
+            if (!Double.isNaN(r.elapsedSec)) {
+                max = Math.max(max, r.elapsedSec);
+            }
+        }
+        return max;
+    }
+
+    static double maxElapsedDelete(List<DeletePoint> rows) {
+        double max = 0.0;
+        for (DeletePoint r : rows) {
             if (!Double.isNaN(r.elapsedSec)) {
                 max = Math.max(max, r.elapsedSec);
             }

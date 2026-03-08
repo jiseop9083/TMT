@@ -156,8 +156,8 @@ public class TopicChurnRunner {
     }
 
     public static void main(String[] args) throws Exception {
-        if (args.length != 13) {
-            System.err.println("Usage: TopicChurnRunner <bootstrap> <createOnlyCount> <phase2DurationSec> <intervalMs> <topicPrefix> <partitions> <replicationFactor> <topicOpsCsv> <eventsCsv> <phaseFile> <topicCreateRequestsCsv> <e2eCsv> <brokerLogPath>");
+        if (args.length != 14) {
+            System.err.println("Usage: TopicChurnRunner <bootstrap> <createOnlyCount> <phase2DurationSec> <intervalMs> <topicPrefix> <partitions> <replicationFactor> <topicOpsCsv> <eventsCsv> <phaseFile> <topicCreateRequestsCsv> <e2eCsv> <topicDeleteRequestsCsv> <brokerLogPath>");
             System.exit(1);
         }
 
@@ -173,7 +173,8 @@ public class TopicChurnRunner {
         final Path phaseFile = Path.of(args[9]);
         final Path topicCreateRequestsCsv = Path.of(args[10]);
         final Path e2eCsv = Path.of(args[11]);
-        final Path brokerLogPath = Path.of(args[12]);
+        final Path topicDeleteRequestsCsv = Path.of(args[12]);
+        final Path brokerLogPath = Path.of(args[13]);
         final BrokerMetadataLogTracker brokerMetadataLogTracker = new BrokerMetadataLogTracker(brokerLogPath);
 
         Properties props = new Properties();
@@ -304,6 +305,22 @@ public class TopicChurnRunner {
                     appendLine(topicOpsCsv, String.format(
                         "%s,%d,delete,%s,%d,create_delete,%.3f,%s,%s",
                         nowIsoMs(), nowEpochMs(), delTopic, deleteRequestIdx, dElapsed, dStatus, esc(dErr)
+                    ));
+                    double deleteBrokerMetadataUpdateMs = brokerMetadataLogTracker.latestForTopic(delTopic);
+                    String deleteBrokerMetadataUpdateMsStr = Double.isNaN(deleteBrokerMetadataUpdateMs)
+                        ? ""
+                        : String.format("%.3f", deleteBrokerMetadataUpdateMs);
+                    String deleteCsvStatus = ("ok".equals(dStatus) && !Double.isNaN(deleteBrokerMetadataUpdateMs)) ? "ok" : "error";
+                    String deleteCsvErr = "";
+                    if (!"ok".equals(dStatus)) {
+                        deleteCsvErr = dErr;
+                    } else if (Double.isNaN(deleteBrokerMetadataUpdateMs)) {
+                        deleteCsvErr = "broker-metadata-update-time-not-found-in-log";
+                    }
+                    appendLine(topicDeleteRequestsCsv, String.format(
+                        "%s,%d,%s,create_delete,%.4f,%s,%s,%s",
+                        nowIsoMs(), nowEpochMs(), delTopic, dElapsed,
+                        deleteBrokerMetadataUpdateMsStr, deleteCsvStatus, esc(deleteCsvErr)
                     ));
                     System.out.printf("DELETE topic=%s idx=%d phase=create_delete status=%s elapsed_ms=%.3f%n",
                         delTopic, deleteRequestIdx, dStatus, dElapsed);
