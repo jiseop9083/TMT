@@ -362,6 +362,26 @@ cleanup() {
 
 trap cleanup EXIT INT TERM
 
+compile_kafka() {
+  local gradlew="$KAFKA_HOME/gradlew"
+
+  if [ ! -f "$gradlew" ]; then
+    log "ERROR: gradlew not found at $gradlew"
+    exit 1
+  fi
+
+  if [ ! -x "$gradlew" ]; then
+    chmod +x "$gradlew" >/dev/null 2>&1 || true
+  fi
+
+  log "Compiling Kafka artifacts (:core:jar :clients:jar, -x test)..."
+  if ! (cd "$KAFKA_HOME" && ./gradlew --no-daemon :core:jar :clients:jar -x test >> "$RUN_LOG" 2>&1); then
+    log "ERROR: Kafka compile failed."
+    exit 1
+  fi
+  log "Kafka compile completed."
+}
+
 if [ ! -f "$CONFIG_FILE" ]; then
   echo "Config file not found: $CONFIG_FILE" >&2
   exit 1
@@ -416,6 +436,7 @@ printf "timestamp,epoch_ms,op,topic,idx,phase,elapsed_ms,status,error\n" > "$TOP
 printf "seq,topic_name,request_latency_us,e2e_latency_us,on_metadata_duration_us,produce_duration_us,status,error\n" > "$TOPIC_CREATE_REQUESTS_CSV"
 printf "timestamp,epoch_ms,topic,phase,delete_latency_ms,broker_metadata_update_ms,status,error\n" > "$TOPIC_DELETE_REQUESTS_CSV"
 
+compile_kafka
 start_broker
 
 METRIC_NAME="BrokerMetadataPublisherOnMetadataUpdateTimeUs"
