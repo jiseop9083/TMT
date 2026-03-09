@@ -364,6 +364,7 @@ trap cleanup EXIT INT TERM
 
 compile_kafka() {
   local gradlew="$KAFKA_HOME/gradlew"
+  local normalized_java_home java_cmd inferred_java_home
 
   if [ ! -f "$gradlew" ]; then
     log "ERROR: gradlew not found at $gradlew"
@@ -372,6 +373,44 @@ compile_kafka() {
 
   if [ ! -x "$gradlew" ]; then
     chmod +x "$gradlew" >/dev/null 2>&1 || true
+  fi
+
+  # Handle common misconfiguration where JAVA_HOME points to ".../bin".
+  if [ -n "${JAVA_HOME:-}" ]; then
+    normalized_java_home="$(printf '%s' "$JAVA_HOME" | sed -E 's#[/\\]+bin$##')"
+    if [ "$normalized_java_home" != "$JAVA_HOME" ]; then
+      log "JAVA_HOME points to a bin directory. Normalizing to: $normalized_java_home"
+      JAVA_HOME="$normalized_java_home"
+      export JAVA_HOME
+    fi
+  fi
+
+  # In Git Bash/Cygwin, convert Windows-style JAVA_HOME if needed.
+  if [ -n "${JAVA_HOME:-}" ] && [ ! -x "$JAVA_HOME/bin/java" ] && command -v cygpath >/dev/null 2>&1; then
+    normalized_java_home="$(cygpath -u "$JAVA_HOME" 2>/dev/null || true)"
+    if [ -n "$normalized_java_home" ] && [ -x "$normalized_java_home/bin/java" ]; then
+      log "Converted JAVA_HOME to POSIX path for current shell: $normalized_java_home"
+      JAVA_HOME="$normalized_java_home"
+      export JAVA_HOME
+    fi
+  fi
+
+  # Fallback: infer JAVA_HOME from java on PATH.
+  if [ -z "${JAVA_HOME:-}" ] || [ ! -x "$JAVA_HOME/bin/java" ]; then
+    java_cmd="$(command -v java || true)"
+    if [ -n "$java_cmd" ]; then
+      inferred_java_home="$(cd "$(dirname "$java_cmd")/.." 2>/dev/null && pwd || true)"
+      if [ -n "$inferred_java_home" ] && [ -x "$inferred_java_home/bin/java" ]; then
+        log "Using JAVA_HOME inferred from PATH: $inferred_java_home"
+        JAVA_HOME="$inferred_java_home"
+        export JAVA_HOME
+      fi
+    fi
+  fi
+
+  if [ -z "${JAVA_HOME:-}" ] || [ ! -x "$JAVA_HOME/bin/java" ]; then
+    log "ERROR: JAVA_HOME is invalid (${JAVA_HOME:-unset}). Set it to your JDK root (not the bin directory)."
+    exit 1
   fi
 
   log "Compiling Kafka artifacts (:core:jar :clients:jar, -x test)..."
