@@ -431,7 +431,7 @@ PARAMS
 printf "timestamp,epoch_ms,event,created_count,deleted_count,phase,note\n" > "$EVENTS_CSV"
 printf "timestamp,epoch_ms,topic,phase,e2e_latency_ms,broker_metadata_update_ms,status,error\n" > "$E2E_CSV"
 printf "timestamp,sample_id,phase,metric_name,metric_object,count,mean,p50,p95,p99,max,status,error\n" > "$BROKER_META_CSV"
-printf "timestamp,epoch_ms,sample_id,phase,process_cpu_load,system_cpu_load,total_mem_bytes,free_mem_bytes,disk_used_kb,disk_avail_kb,disk_use_percent,status,error\n" > "$RESOURCE_CSV"
+printf "timestamp,epoch_ms,sample_id,phase,process_cpu_load,system_cpu_load,total_mem_bytes,free_mem_bytes,disk_used_kb,disk_avail_kb,disk_use_percent,broker_pid,open_fd_count,cpu_pct,rss_kb,vsz_kb,heap_used_kb,heap_committed_kb,status,error\n" > "$RESOURCE_CSV"
 printf "timestamp,epoch_ms,op,topic,idx,phase,elapsed_ms,status,error\n" > "$TOPIC_OPS_CSV"
 printf "seq,topic_name,request_latency_us,e2e_latency_us,on_metadata_duration_us,produce_duration_us,status,error\n" > "$TOPIC_CREATE_REQUESTS_CSV"
 printf "timestamp,epoch_ms,topic,phase,delete_latency_ms,broker_metadata_update_ms,status,error\n" > "$TOPIC_DELETE_REQUESTS_CSV"
@@ -549,14 +549,76 @@ sample_metadata_loop() {
   done
 }
 
+append_err() {
+  local cur="$1"
+  local add="$2"
+  if [ -z "$cur" ]; then
+    echo "$add"
+  else
+    echo "$cur;$add"
+  fi
+}
+
+count_open_fds() {
+  local pid="$1"
+  if ! command -v lsof >/dev/null 2>&1; then
+    echo ""
+    return 0
+  fi
+  if [ -z "$pid" ] || ! kill -0 "$pid" >/dev/null 2>&1; then
+    echo ""
+    return 0
+  fi
+  lsof -p "$pid" 2>/dev/null | tail -n +2 | wc -l | tr -d ' '
+}
+
+measure_ps_stats() {
+  local pid="$1"
+  if ! command -v ps >/dev/null 2>&1; then
+    echo ",,"
+    return 0
+  fi
+  local row
+  row="$(ps -p "$pid" -o %cpu=,rss=,vsz= 2>/dev/null | awk 'NR==1{print $1","$2","$3}')"
+  if [ -z "$row" ]; then
+    echo ",,"
+  else
+    echo "$row"
+  fi
+}
+
+measure_heap_kb() {
+  local pid="$1"
+  if ! command -v jstat >/dev/null 2>&1; then
+    echo ","
+    return 0
+  fi
+  local gc_row
+  gc_row="$(jstat -gc "$pid" 2>/dev/null | awk 'NR==2{print $1","$2","$3","$4","$5","$6","$7","$8}')"
+  if [ -z "$gc_row" ]; then
+    echo ","
+    return 0
+  fi
+  local s0c s1c s0u s1u ec eu oc ou
+  IFS=',' read -r s0c s1c s0u s1u ec eu oc ou <<< "$gc_row"
+  awk -v s0c="${s0c:-0}" -v s1c="${s1c:-0}" -v ec="${ec:-0}" -v oc="${oc:-0}" \
+      -v s0u="${s0u:-0}" -v s1u="${s1u:-0}" -v eu="${eu:-0}" -v ou="${ou:-0}" \
+      'BEGIN{
+        committed=s0c+s1c+ec+oc;
+        used=s0u+s1u+eu+ou;
+        printf "%.0f,%.0f", used, committed;
+      }'
+}
+
 sample_resource_loop() {
   local sample_id=0
   local os_attrs="ProcessCpuLoad,SystemCpuLoad,TotalPhysicalMemorySize,FreePhysicalMemorySize"
 
   while [ ! -f "$STOP_FILE" ]; do
     sample_id=$((sample_id + 1))
-    local ts epoch_ms phase os_out os_row status err
+    local ts epoch_ms phase os_out status err
     local process_cpu system_cpu total_mem free_mem disk_used disk_avail disk_pct
+    local broker_pid fd_count ps_stats cpu_pct rss_kb vsz_kb heap_stats heap_used_kb heap_committed_kb
     ts="$(now_iso8601_ms)"
     epoch_ms="$(now_epoch_ms)"
     phase="$(current_phase)"
@@ -569,17 +631,39 @@ sample_resource_loop() {
       --attributes "$os_attrs" \
       --one-time 2>/dev/null || true)
 
-    os_row="$(echo "$os_out" | tail -n 1)"
     process_cpu=""; system_cpu=""; total_mem=""; free_mem=""
 
     if [ -z "$os_out" ] || [ "$(echo "$os_out" | wc -l | tr -d ' ')" -lt 2 ]; then
       status="error"
       err="os-jmx-query-failed"
     else
-      local os_data
-      os_data="${os_row#*,}"
-      IFS=',' read -r process_cpu system_cpu total_mem free_mem <<< "$os_data"
-      if [ -z "$total_mem" ] && [ -z "$free_mem" ]; then
+      local os_header os_data os_col os_val i
+      local -a os_header_cols os_data_cols
+      os_header="$(echo "$os_out" | head -n 1)"
+      os_data="$(echo "$os_out" | tail -n 1)"
+      IFS=',' read -r -a os_header_cols <<< "$os_header"
+      IFS=',' read -r -a os_data_cols <<< "$os_data"
+
+      for i in "${!os_header_cols[@]}"; do
+        os_col="${os_header_cols[$i]}"
+        os_val="${os_data_cols[$i]:-}"
+        case "$os_col" in
+          *ProcessCpuLoad)
+            process_cpu="$os_val"
+            ;;
+          *SystemCpuLoad)
+            system_cpu="$os_val"
+            ;;
+          *TotalPhysicalMemorySize)
+            total_mem="$os_val"
+            ;;
+          *FreePhysicalMemorySize)
+            free_mem="$os_val"
+            ;;
+        esac
+      done
+
+      if [ -z "$process_cpu" ] && [ -z "$system_cpu" ] && [ -z "$total_mem" ] && [ -z "$free_mem" ]; then
         status="error"
         err="os-jmx-parse-failed"
       fi
@@ -592,26 +676,27 @@ sample_resource_loop() {
       if [ -n "$df_line" ]; then
         IFS=',' read -r disk_used disk_avail disk_pct <<< "$df_line"
       else
-        if [ "$status" = "ok" ]; then
-          status="error"
-          err="disk-df-parse-failed"
-        else
-          err="$err;disk-df-parse-failed"
-        fi
+        status="error"
+        err="$(append_err "$err" "disk-df-parse-failed")"
       fi
     else
-      if [ "$status" = "ok" ]; then
-        status="error"
-        err="log-dir-not-found"
-      else
-        err="$err;log-dir-not-found"
-      fi
+      status="error"
+      err="$(append_err "$err" "log-dir-not-found")"
     fi
 
-    printf "%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n" \
+    broker_pid="$BROKER_PID"
+    fd_count="$(count_open_fds "$broker_pid")"
+    ps_stats="$(measure_ps_stats "$broker_pid")"
+    IFS=',' read -r cpu_pct rss_kb vsz_kb <<< "$ps_stats"
+    heap_stats="$(measure_heap_kb "$broker_pid")"
+    IFS=',' read -r heap_used_kb heap_committed_kb <<< "$heap_stats"
+
+    printf "%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n" \
       "$ts" "$epoch_ms" "$sample_id" "$phase" \
       "${process_cpu//,/;}" "${system_cpu//,/;}" "${total_mem//,/;}" "${free_mem//,/;}" \
-      "${disk_used//,/;}" "${disk_avail//,/;}" "${disk_pct//,/;}" "$status" "${err//,/;}" >> "$RESOURCE_CSV"
+      "${disk_used//,/;}" "${disk_avail//,/;}" "${disk_pct//,/;}" \
+      "${broker_pid//,/;}" "${fd_count//,/;}" "${cpu_pct//,/;}" "${rss_kb//,/;}" "${vsz_kb//,/;}" \
+      "${heap_used_kb//,/;}" "${heap_committed_kb//,/;}" "$status" "${err//,/;}" >> "$RESOURCE_CSV"
 
     sleep "$RESOURCE_SAMPLE_INTERVAL_SEC"
   done
