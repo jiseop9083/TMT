@@ -13,6 +13,7 @@ PARTITIONS=1
 REPLICATION_FACTOR=1
 PRODUCER_RECORD_SIZE=512
 PRODUCER_ACKS=1
+RETRY_BACKOFF_MS=1
 PRODUCER_TOPIC_PREFIX="e2e_probe_topic_"
 E2E_SAMPLE_INTERVAL_SEC=1
 METADATA_SAMPLE_INTERVAL_SEC=1
@@ -43,6 +44,7 @@ Options:
   --replication-factor <n>           per-topic replication-factor (default: 1)
   --producer-record-size <bytes>     e2e probe record size (default: 512)
   --producer-acks <acks>             e2e probe producer acks (default: 1)
+  --retry-backoff-ms <ms>            producer/admin retry.backoff.ms (default: 1)
   --producer-topic-prefix <prefix>   e2e probe topic prefix (default: e2e_probe_topic_)
   --e2e-sample-interval-sec <sec>    (default: 1)
   --metadata-sample-interval-sec <sec> (default: 1)
@@ -79,6 +81,8 @@ while [ $# -gt 0 ]; do
       PRODUCER_RECORD_SIZE="$2"; shift 2 ;;
     --producer-acks)
       PRODUCER_ACKS="$2"; shift 2 ;;
+    --retry-backoff-ms)
+      RETRY_BACKOFF_MS="$2"; shift 2 ;;
     --producer-topic-prefix)
       PRODUCER_TOPIC_PREFIX="$2"; shift 2 ;;
     --e2e-sample-interval-sec)
@@ -147,6 +151,7 @@ if [ "$REPEAT_COUNT" -gt 1 ]; then
       --replication-factor "$REPLICATION_FACTOR" \
       --producer-record-size "$PRODUCER_RECORD_SIZE" \
       --producer-acks "$PRODUCER_ACKS" \
+      --retry-backoff-ms "$RETRY_BACKOFF_MS" \
       --producer-topic-prefix "$PRODUCER_TOPIC_PREFIX" \
       --e2e-sample-interval-sec "$E2E_SAMPLE_INTERVAL_SEC" \
       --metadata-sample-interval-sec "$METADATA_SAMPLE_INTERVAL_SEC" \
@@ -454,6 +459,7 @@ PARTITIONS=$PARTITIONS
 REPLICATION_FACTOR=$REPLICATION_FACTOR
 PRODUCER_RECORD_SIZE=$PRODUCER_RECORD_SIZE
 PRODUCER_ACKS=$PRODUCER_ACKS
+RETRY_BACKOFF_MS=$RETRY_BACKOFF_MS
 PRODUCER_TOPIC_PREFIX=$PRODUCER_TOPIC_PREFIX
 E2E_SAMPLE_INTERVAL_SEC=$E2E_SAMPLE_INTERVAL_SEC
 METADATA_SAMPLE_INTERVAL_SEC=$METADATA_SAMPLE_INTERVAL_SEC
@@ -470,7 +476,7 @@ PARAMS
 printf "timestamp,epoch_ms,event,created_count,deleted_count,phase,note\n" > "$EVENTS_CSV"
 printf "timestamp,epoch_ms,topic,phase,e2e_latency_ms,broker_metadata_update_ms,status,error\n" > "$E2E_CSV"
 printf "timestamp,sample_id,phase,metric_name,metric_object,count,mean,p50,p95,p99,max,status,error\n" > "$BROKER_META_CSV"
-printf "timestamp,epoch_ms,sample_id,phase,process_cpu_load,system_cpu_load,total_mem_bytes,free_mem_bytes,disk_used_kb,disk_avail_kb,disk_use_percent,broker_pid,open_fd_count,cpu_pct,rss_kb,vsz_kb,heap_used_kb,heap_committed_kb,status,error\n" > "$RESOURCE_CSV"
+printf "timestamp,epoch_ms,sample_id,phase,broker_pid,open_fd_count,cpu_pct,rss_kb,vsz_kb,heap_used_kb,heap_committed_kb,storage_kb,topic_dir_count,segment_file_count\n" > "$RESOURCE_CSV"
 printf "timestamp,epoch_ms,op,topic,idx,phase,elapsed_ms,status,error\n" > "$TOPIC_OPS_CSV"
 printf "seq,topic_name,request_latency_us,e2e_latency_us,on_metadata_duration_us,produce_duration_us,status,error\n" > "$TOPIC_CREATE_REQUESTS_CSV"
 printf "timestamp,epoch_ms,topic,phase,delete_latency_ms,broker_metadata_update_ms,status,error\n" > "$TOPIC_DELETE_REQUESTS_CSV"
@@ -521,6 +527,7 @@ sample_e2e_loop() {
       --topic-prefix "$PRODUCER_TOPIC_PREFIX" \
       --record-size "$PRODUCER_RECORD_SIZE" \
       --acks "$PRODUCER_ACKS" \
+      --retry-backoff-ms "$RETRY_BACKOFF_MS" \
       --output "$tmp_csv" >/dev/null 2>&1 || {
         status="error"
         err="producer-latency-command-failed"
@@ -611,6 +618,33 @@ count_open_fds() {
   lsof -p "$pid" 2>/dev/null | tail -n +2 | wc -l | tr -d ' '
 }
 
+count_topic_dirs() {
+  local base_dir="$1"
+  if [ ! -d "$base_dir" ]; then
+    echo "0"
+    return 0
+  fi
+  find "$base_dir" -maxdepth 1 -type d -name "${TOPIC_PREFIX}*" 2>/dev/null | wc -l | tr -d ' '
+}
+
+count_segment_files() {
+  local base_dir="$1"
+  if [ ! -d "$base_dir" ]; then
+    echo "0"
+    return 0
+  fi
+  find "$base_dir" -type f \( -name '*.log' -o -name '*.index' -o -name '*.timeindex' \) 2>/dev/null | wc -l | tr -d ' '
+}
+
+measure_storage_kb() {
+  local base_dir="$1"
+  if [ ! -d "$base_dir" ]; then
+    echo "0"
+    return 0
+  fi
+  du -sk "$base_dir" 2>/dev/null | awk '{print $1}'
+}
+
 measure_ps_stats() {
   local pid="$1"
   if ! command -v ps >/dev/null 2>&1; then
@@ -651,77 +685,15 @@ measure_heap_kb() {
 
 sample_resource_loop() {
   local sample_id=0
-  local os_attrs="ProcessCpuLoad,SystemCpuLoad,TotalPhysicalMemorySize,FreePhysicalMemorySize"
 
   while [ ! -f "$STOP_FILE" ]; do
     sample_id=$((sample_id + 1))
-    local ts epoch_ms phase os_out status err
-    local process_cpu system_cpu total_mem free_mem disk_used disk_avail disk_pct
+    local ts epoch_ms phase
     local broker_pid fd_count ps_stats cpu_pct rss_kb vsz_kb heap_stats heap_used_kb heap_committed_kb
+    local storage_kb topic_dir_count segment_file_count
     ts="$(now_iso8601_ms)"
     epoch_ms="$(now_epoch_ms)"
     phase="$(current_phase)"
-    status="ok"
-    err=""
-
-    os_out=$("$KAFKA_HOME/bin/kafka-jmx.sh" \
-      --jmx-url "$JMX_URL" \
-      --object-name "java.lang:type=OperatingSystem" \
-      --attributes "$os_attrs" \
-      --one-time 2>/dev/null || true)
-
-    process_cpu=""; system_cpu=""; total_mem=""; free_mem=""
-
-    if [ -z "$os_out" ] || [ "$(echo "$os_out" | wc -l | tr -d ' ')" -lt 2 ]; then
-      status="error"
-      err="os-jmx-query-failed"
-    else
-      local os_header os_data os_col os_val i
-      local -a os_header_cols os_data_cols
-      os_header="$(echo "$os_out" | head -n 1)"
-      os_data="$(echo "$os_out" | tail -n 1)"
-      IFS=',' read -r -a os_header_cols <<< "$os_header"
-      IFS=',' read -r -a os_data_cols <<< "$os_data"
-
-      for i in "${!os_header_cols[@]}"; do
-        os_col="${os_header_cols[$i]}"
-        os_val="${os_data_cols[$i]:-}"
-        case "$os_col" in
-          *ProcessCpuLoad)
-            process_cpu="$os_val"
-            ;;
-          *SystemCpuLoad)
-            system_cpu="$os_val"
-            ;;
-          *TotalPhysicalMemorySize)
-            total_mem="$os_val"
-            ;;
-          *FreePhysicalMemorySize)
-            free_mem="$os_val"
-            ;;
-        esac
-      done
-
-      if [ -z "$process_cpu" ] && [ -z "$system_cpu" ] && [ -z "$total_mem" ] && [ -z "$free_mem" ]; then
-        status="error"
-        err="os-jmx-parse-failed"
-      fi
-    fi
-
-    disk_used=""; disk_avail=""; disk_pct=""
-    if [ -e "$LOG_DIR" ]; then
-      local df_line
-      df_line="$(df -k "$LOG_DIR" 2>/dev/null | awk 'NR==2 {print $3","$4","$5}')"
-      if [ -n "$df_line" ]; then
-        IFS=',' read -r disk_used disk_avail disk_pct <<< "$df_line"
-      else
-        status="error"
-        err="$(append_err "$err" "disk-df-parse-failed")"
-      fi
-    else
-      status="error"
-      err="$(append_err "$err" "log-dir-not-found")"
-    fi
 
     broker_pid="$BROKER_PID"
     fd_count="$(count_open_fds "$broker_pid")"
@@ -729,13 +701,15 @@ sample_resource_loop() {
     IFS=',' read -r cpu_pct rss_kb vsz_kb <<< "$ps_stats"
     heap_stats="$(measure_heap_kb "$broker_pid")"
     IFS=',' read -r heap_used_kb heap_committed_kb <<< "$heap_stats"
+    storage_kb="$(measure_storage_kb "$LOG_DIR")"
+    topic_dir_count="$(count_topic_dirs "$LOG_DIR")"
+    segment_file_count="$(count_segment_files "$LOG_DIR")"
 
-    printf "%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n" \
+    printf "%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n" \
       "$ts" "$epoch_ms" "$sample_id" "$phase" \
-      "${process_cpu//,/;}" "${system_cpu//,/;}" "${total_mem//,/;}" "${free_mem//,/;}" \
-      "${disk_used//,/;}" "${disk_avail//,/;}" "${disk_pct//,/;}" \
       "${broker_pid//,/;}" "${fd_count//,/;}" "${cpu_pct//,/;}" "${rss_kb//,/;}" "${vsz_kb//,/;}" \
-      "${heap_used_kb//,/;}" "${heap_committed_kb//,/;}" "$status" "${err//,/;}" >> "$RESOURCE_CSV"
+      "${heap_used_kb//,/;}" "${heap_committed_kb//,/;}" \
+      "${storage_kb//,/;}" "${topic_dir_count//,/;}" "${segment_file_count//,/;}" >> "$RESOURCE_CSV"
 
     sleep "$RESOURCE_SAMPLE_INTERVAL_SEC"
   done
@@ -747,6 +721,7 @@ log "Bootstrap server: $BOOTSTRAP_SERVER"
 log "Create-only topic count: $CREATE_ONLY_COUNT"
 log "Phase2 duration(after create-only): ${PHASE2_DURATION_SEC}s"
 log "Create/Delete interval: ${INTERVAL_MS}ms"
+log "Client retry.backoff.ms: ${RETRY_BACKOFF_MS}ms"
 log "Metadata metric source file: $BROKER_META_SNAPSHOT"
 log "JMX URL: $JMX_URL"
 
@@ -796,6 +771,7 @@ java -cp "$RUNNER_CP" TopicChurnRunner \
   "$TOPIC_PREFIX" \
   "$PARTITIONS" \
   "$REPLICATION_FACTOR" \
+  "$RETRY_BACKOFF_MS" \
   "$TOPIC_OPS_CSV" \
   "$EVENTS_CSV" \
   "$PHASE_FILE" \

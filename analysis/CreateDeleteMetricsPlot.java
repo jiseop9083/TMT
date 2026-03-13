@@ -220,9 +220,6 @@ public class CreateDeleteMetricsPlot {
                     continue;
                 }
                 String[] p = line.split(",", -1);
-                if (!"ok".equalsIgnoreCase(value(p, idx, "status"))) {
-                    continue;
-                }
 
                 long ts = parseTs(value(p, idx, "timestamp"));
                 if (ts < 0) {
@@ -233,15 +230,27 @@ public class CreateDeleteMetricsPlot {
                 }
                 double elapsedSec = (ts - baseTs) / 1000.0;
 
-                double processRaw = parseDouble(value(p, idx, "process_cpu_load"));
-                double systemRaw = parseDouble(value(p, idx, "system_cpu_load"));
-                double totalMem = parseDouble(value(p, idx, "total_mem_bytes"));
-                double freeMem = parseDouble(value(p, idx, "free_mem_bytes"));
-                double diskPct = parsePercent(value(p, idx, "disk_use_percent"));
+                double cpuPercent;
+                double memoryMb;
+                double storageValue;
 
-                double cpuPercent = normalizeCpu(processRaw, systemRaw);
-                double memoryMb = normalizeMemoryMb(processRaw, totalMem, freeMem);
-                rows.add(new ResourcePoint(elapsedSec, cpuPercent, memoryMb, diskPct));
+                if (idx.containsKey("cpu_pct")) {
+                    cpuPercent = parseDouble(value(p, idx, "cpu_pct"));
+                    memoryMb = parseDouble(value(p, idx, "rss_kb")) / 1024.0;
+                    storageValue = parseDouble(value(p, idx, "storage_kb")) / 1024.0;
+                } else {
+                    if (!"ok".equalsIgnoreCase(value(p, idx, "status"))) {
+                        continue;
+                    }
+                    double processRaw = parseDouble(value(p, idx, "process_cpu_load"));
+                    double systemRaw = parseDouble(value(p, idx, "system_cpu_load"));
+                    double totalMem = parseDouble(value(p, idx, "total_mem_bytes"));
+                    double freeMem = parseDouble(value(p, idx, "free_mem_bytes"));
+                    cpuPercent = normalizeCpu(processRaw, systemRaw);
+                    memoryMb = normalizeMemoryMb(processRaw, totalMem, freeMem);
+                    storageValue = parsePercent(value(p, idx, "disk_use_percent"));
+                }
+                rows.add(new ResourcePoint(elapsedSec, cpuPercent, memoryMb, storageValue));
             }
         }
         rows.sort(Comparator.comparingDouble(r -> r.elapsedSec));
@@ -540,7 +549,7 @@ public class CreateDeleteMetricsPlot {
         drawLinePanel(g, left, y2, plotWidth, panelHeight, xs, mem,
                 "Memory (MB)", Color.decode("#2563EB"), true, false, null, null, fixedMinX, fixedMaxX);
         drawLinePanel(g, left, y3, plotWidth, panelHeight, xs, disk,
-                "Disk (%)", Color.decode("#16A34A"), true, false, null, null, fixedMinX, fixedMaxX);
+                "Storage", Color.decode("#16A34A"), true, false, null, null, fixedMinX, fixedMaxX);
 
         g.setColor(Color.decode("#374151"));
         g.setFont(new Font("SansSerif", Font.PLAIN, 14));

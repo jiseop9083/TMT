@@ -156,8 +156,8 @@ public class TopicChurnRunner {
     }
 
     public static void main(String[] args) throws Exception {
-        if (args.length != 14) {
-            System.err.println("Usage: TopicChurnRunner <bootstrap> <createOnlyCount> <phase2DurationSec> <intervalMs> <topicPrefix> <partitions> <replicationFactor> <topicOpsCsv> <eventsCsv> <phaseFile> <topicCreateRequestsCsv> <e2eCsv> <topicDeleteRequestsCsv> <brokerLogPath>");
+        if (args.length != 15) {
+            System.err.println("Usage: TopicChurnRunner <bootstrap> <createOnlyCount> <phase2DurationSec> <intervalMs> <topicPrefix> <partitions> <replicationFactor> <retryBackoffMs> <topicOpsCsv> <eventsCsv> <phaseFile> <topicCreateRequestsCsv> <e2eCsv> <topicDeleteRequestsCsv> <brokerLogPath>");
             System.exit(1);
         }
 
@@ -168,19 +168,21 @@ public class TopicChurnRunner {
         final String topicPrefix = args[4];
         final int partitions = Integer.parseInt(args[5]);
         final short replicationFactor = Short.parseShort(args[6]);
-        final Path topicOpsCsv = Path.of(args[7]);
-        final Path eventsCsv = Path.of(args[8]);
-        final Path phaseFile = Path.of(args[9]);
-        final Path topicCreateRequestsCsv = Path.of(args[10]);
-        final Path e2eCsv = Path.of(args[11]);
-        final Path topicDeleteRequestsCsv = Path.of(args[12]);
-        final Path brokerLogPath = Path.of(args[13]);
+        final String retryBackoffMs = args[7];
+        final Path topicOpsCsv = Path.of(args[8]);
+        final Path eventsCsv = Path.of(args[9]);
+        final Path phaseFile = Path.of(args[10]);
+        final Path topicCreateRequestsCsv = Path.of(args[11]);
+        final Path e2eCsv = Path.of(args[12]);
+        final Path topicDeleteRequestsCsv = Path.of(args[13]);
+        final Path brokerLogPath = Path.of(args[14]);
         final BrokerMetadataLogTracker brokerMetadataLogTracker = new BrokerMetadataLogTracker(brokerLogPath);
 
         Properties props = new Properties();
         props.put("bootstrap.servers", bootstrap);
         props.put("request.timeout.ms", "30000");
         props.put("default.api.timeout.ms", "30000");
+        props.put("retry.backoff.ms", retryBackoffMs);
         Properties producerProps = new Properties();
         producerProps.put("bootstrap.servers", bootstrap);
         producerProps.put("acks", "1");
@@ -188,6 +190,7 @@ public class TopicChurnRunner {
         producerProps.put("request.timeout.ms", "30000");
         producerProps.put("delivery.timeout.ms", "120000");
         producerProps.put("max.block.ms", "30000");
+        producerProps.put("retry.backoff.ms", retryBackoffMs);
         producerProps.put("key.serializer", "org.apache.kafka.common.serialization.ByteArraySerializer");
         producerProps.put("value.serializer", "org.apache.kafka.common.serialization.ByteArraySerializer");
 
