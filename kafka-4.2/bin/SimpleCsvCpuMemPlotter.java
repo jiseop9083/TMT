@@ -24,13 +24,14 @@ public class SimpleCsvCpuMemPlotter {
         String cpuCol = a.getOrDefault("--cpu-col", "cpu_percent");
         String memCol = a.getOrDefault("--mem-col", "memory_rss_mb");
         String title = a.getOrDefault("--title", "Broker CPU and Memory");
+        String xLabel = a.getOrDefault("--x-label", "Elapsed Time (s)");
 
         List<Double> xs = new ArrayList<>();
         List<Double> cpus = new ArrayList<>();
         List<Double> mems = new ArrayList<>();
         read(csv, xCol, cpuCol, memCol, xs, cpus, mems);
         if (xs.isEmpty()) throw new IllegalStateException("No numeric rows found in CSV: " + csv);
-        render(xs, cpus, mems, out, title);
+        render(xs, cpus, mems, out, title, xLabel);
     }
 
     private static void read(String csv, String xCol, String cpuCol, String memCol,
@@ -62,7 +63,8 @@ public class SimpleCsvCpuMemPlotter {
         }
     }
 
-    private static void render(List<Double> xs, List<Double> cpus, List<Double> mems, String outFile, String title) throws Exception {
+    private static void render(List<Double> xs, List<Double> cpus, List<Double> mems,
+                               String outFile, String title, String xLabel) throws Exception {
         int width = 1200;
         int height = 700;
         int left = 90;
@@ -86,12 +88,12 @@ public class SimpleCsvCpuMemPlotter {
         int topY = top;
         int bottomY = top + panelH + gap;
 
-        drawPanel(g, xs, cpus, left, topY, plotW, panelH, "CPU (%)", new Color(47, 107, 255));
-        drawPanel(g, xs, mems, left, bottomY, plotW, panelH, "Memory RSS (MB)", new Color(217, 119, 6));
+        drawPanel(g, xs, cpus, left, topY, plotW, panelH, "CPU (%)", new Color(47, 107, 255), false);
+        drawPanel(g, xs, mems, left, bottomY, plotW, panelH, "Memory RSS (MB)", new Color(217, 119, 6), true);
 
         g.setFont(new Font("SansSerif", Font.PLAIN, 14));
         g.setColor(Color.DARK_GRAY);
-        g.drawString("sample", left + plotW / 2 - 20, height - 15);
+        g.drawString(xLabel, left + plotW / 2 - 40, height - 15);
 
         Path outPath = Path.of(outFile);
         if (outPath.getParent() != null) Files.createDirectories(outPath.getParent());
@@ -100,18 +102,23 @@ public class SimpleCsvCpuMemPlotter {
     }
 
     private static void drawPanel(Graphics2D g, List<Double> xs, List<Double> ys, int left, int top, int plotW, int plotH,
-                                  String yLabel, Color color) {
+                                  String yLabel, Color color, boolean drawXLabels) {
         double minX = xs.stream().min(Double::compareTo).orElse(0.0);
         double maxX = xs.stream().max(Double::compareTo).orElse(1.0);
-        double minY = ys.stream().min(Double::compareTo).orElse(0.0);
+        double minY = 0.0;
         double maxY = ys.stream().max(Double::compareTo).orElse(1.0);
         if (minX == maxX) maxX = minX + 1;
         if (minY == maxY) maxY = minY + 1;
 
+        int gridCount = 6;
         g.setColor(new Color(235, 235, 235));
-        for (int i = 0; i <= 6; i++) {
-            int y = top + (int) Math.round(i * (plotH / 6.0));
+        for (int i = 0; i <= gridCount; i++) {
+            int y = top + (int) Math.round(i * (plotH / (double) gridCount));
             g.drawLine(left, y, left + plotW, y);
+        }
+        for (int i = 0; i <= gridCount; i++) {
+            int x = left + (int) Math.round(i * (plotW / (double) gridCount));
+            g.drawLine(x, top, x, top + plotH);
         }
 
         g.setColor(Color.BLACK);
@@ -133,6 +140,32 @@ public class SimpleCsvCpuMemPlotter {
             prevX = x;
             prevY = y;
         }
+
+        g.setColor(Color.DARK_GRAY);
+        g.setFont(new Font("SansSerif", Font.PLAIN, 11));
+        for (int i = 0; i <= gridCount; i++) {
+            double yVal = maxY - ((maxY - minY) * i / gridCount);
+            int y = top + (int) Math.round(i * (plotH / (double) gridCount));
+            g.drawString(formatTick(yVal), left - 52, y + 4);
+        }
+
+        if (drawXLabels) {
+            for (int i = 0; i <= gridCount; i++) {
+                double xVal = minX + ((maxX - minX) * i / gridCount);
+                int x = left + (int) Math.round(i * (plotW / (double) gridCount));
+                g.drawString(formatTick(xVal), x - 10, top + plotH + 16);
+            }
+        }
+    }
+
+    private static String formatTick(double value) {
+        if (Math.abs(value) >= 100 || Math.abs(value - Math.rint(value)) < 1e-9) {
+            return String.format("%.0f", value);
+        }
+        if (Math.abs(value) >= 10) {
+            return String.format("%.1f", value);
+        }
+        return String.format("%.2f", value);
     }
 
     private static String required(Map<String, String> args, String key) {

@@ -1905,6 +1905,55 @@ public class UnifiedLog implements AutoCloseable {
             : Optional.empty();
     }
 
+    // private int deleteSegments(List<LogSegment> deletable, SegmentDeletionReason reason) {
+    //     return maybeHandleIOException(
+    //         () -> "Error while deleting segments for " + topicPartition() + " in dir " + dir().getParent(),
+    //         () -> {
+    //             int numToDelete = deletable.size();
+    //             if (numToDelete > 0) {
+    //                 // Experimental behavior:
+    //                 // allow deleting all segments without rolling a new active segment first.
+    //                 List<LogSegment> segmentsToDelete = List.copyOf(deletable);
+    
+    //                 localLog.checkIfMemoryMappedBufferClosed();
+    
+    //                 if (!segmentsToDelete.isEmpty()) {
+    //                     LogSegment lastToDelete = segmentsToDelete.get(segmentsToDelete.size() - 1);
+    //                     Optional<LogSegment> nextSegment =
+    //                         localLog.segments().higherSegment(lastToDelete.baseOffset());
+    
+    //                     long newStartOffset;
+    //                     if (nextSegment.isPresent()) {
+    //                         newStartOffset = nextSegment.get().baseOffset();
+    //                     } else {
+    //                         // No segment will remain after deletion.
+    //                         // For the experiment, move the start offset to the log end offset.
+    //                         newStartOffset = localLog.logEndOffset();
+    //                     }
+    
+    //                     if (remoteLogEnabledAndRemoteCopyEnabled()) {
+    //                         maybeIncrementLocalLogStartOffset(
+    //                             newStartOffset,
+    //                             LogStartOffsetIncrementReason.SegmentDeletion
+    //                         );
+    //                     } else {
+    //                         maybeIncrementLogStartOffset(
+    //                             newStartOffset,
+    //                             LogStartOffsetIncrementReason.SegmentDeletion
+    //                         );
+    //                     }
+    
+    //                     // remove the segments for lookups
+    //                     localLog.removeAndDeleteSegments(segmentsToDelete, false, reason);
+    //                 }
+    
+    //                 deleteProducerSnapshots(deletable, false);
+    //             }
+    //             return numToDelete;
+    //         }
+    //     );
+    // }
+
     private int deleteSegments(List<LogSegment> deletable, SegmentDeletionReason reason) {
         return maybeHandleIOException(() -> "Error while deleting segments for " + topicPartition() + " in dir " + dir().getParent(),
                 () -> {
@@ -1930,9 +1979,9 @@ public class UnifiedLog implements AutoCloseable {
                                 maybeIncrementLogStartOffset(newLocalLogStartOffset, LogStartOffsetIncrementReason.SegmentDeletion);
                             }
                             // remove the segments for lookups
-                            localLog.removeAndDeleteSegments(segmentsToDelete, true, reason);
+                            localLog.removeAndDeleteSegments(segmentsToDelete, false, reason);
                         }
-                        deleteProducerSnapshots(deletable, true);
+                        deleteProducerSnapshots(deletable, false);
                     }
                     return numToDelete;
                 });
